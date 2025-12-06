@@ -10,39 +10,49 @@ export default function CentralBankLoginPage() {
   const supabase = getSupabaseBrowserClient();
 
   const [email, setEmail] = useState("");
-  const [status, setStatus] = useState<"idle" | "sending" | "sent" | "error">(
-    "idle"
-  );
+  const [password, setPassword] = useState("");
+  const [status, setStatus] = useState<
+    "idle" | "signing-in" | "error"
+  >("idle");
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
 
   async function handleSubmit(e: FormEvent) {
     e.preventDefault();
-    setStatus("sending");
+    setStatus("signing-in");
     setErrorMessage(null);
 
     try {
-      const origin =
-        typeof window !== "undefined" ? window.location.origin : "";
-
-      const { error } = await supabase.auth.signInWithOtp({
+      const { data, error } = await supabase.auth.signInWithPassword({
         email,
-        options: {
-          emailRedirectTo: `${origin}/central-bank`,
-        },
+        password,
       });
 
-      if (error) {
-        console.error("Supabase magic link error:", error);
+      if (error || !data?.user) {
+        console.error("Supabase password sign-in error:", error);
         setStatus("error");
-        setErrorMessage(error.message ?? "Failed to send magic link.");
+        setErrorMessage(
+          error?.message ?? "Invalid email or password. Please try again."
+        );
         return;
       }
 
-      setStatus("sent");
+      // Success → go to central bank dashboard
+      router.replace("/central-bank");
     } catch (err: any) {
-      console.error("Magic link error:", err);
+      console.error("Password sign-in error:", err);
       setStatus("error");
-      setErrorMessage("Unexpected error sending magic link.");
+      setErrorMessage("Unexpected error during sign-in.");
+    }
+  }
+
+  async function handleClearSession() {
+    try {
+      await supabase.auth.signOut();
+    } catch (err) {
+      console.error("Error clearing session:", err);
+    } finally {
+      setStatus("idle");
+      setErrorMessage(null);
     }
   }
 
@@ -58,7 +68,7 @@ export default function CentralBankLoginPage() {
           </h1>
           <p className="text-xs text-zinc-400">
             This area is reserved for authorised central bank and admin users.
-            Enter your work email to receive a one-time login link.
+            Use your assigned email and password to access the dashboard.
           </p>
         </div>
 
@@ -81,16 +91,30 @@ export default function CentralBankLoginPage() {
             />
           </div>
 
+          <div className="space-y-1">
+            <label
+              htmlFor="password"
+              className="text-xs font-medium text-zinc-300"
+            >
+              Password
+            </label>
+            <input
+              id="password"
+              type="password"
+              required
+              value={password}
+              onChange={(e) => setPassword(e.target.value)}
+              placeholder="••••••••"
+              className="w-full rounded-xl border border-zinc-800 bg-black px-3 py-2 text-sm text-zinc-100 focus:border-emerald-500 focus:outline-none focus:ring-1 focus:ring-emerald-500/60"
+            />
+          </div>
+
           <button
             type="submit"
-            disabled={status === "sending" || status === "sent"}
+            disabled={status === "signing-in"}
             className="w-full rounded-xl bg-emerald-500 px-3 py-2 text-sm font-medium text-black hover:bg-emerald-400 disabled:cursor-not-allowed disabled:opacity-70"
           >
-            {status === "sending"
-              ? "Sending magic link..."
-              : status === "sent"
-              ? "Link sent — check your email"
-              : "Send magic link"}
+            {status === "signing-in" ? "Signing in…" : "Sign in"}
           </button>
 
           {status === "error" && errorMessage && (
@@ -98,8 +122,8 @@ export default function CentralBankLoginPage() {
           )}
 
           <p className="text-[0.7rem] text-zinc-500">
-            You&apos;ll receive an email with a one-time link. Clicking it will
-            bring you back to the Central Bank dashboard.
+            Accounts are provisioned centrally. If you need access, please
+            contact the system administrator.
           </p>
         </form>
 
@@ -112,10 +136,7 @@ export default function CentralBankLoginPage() {
           </Link>
           <button
             type="button"
-            onClick={async () => {
-              await supabase.auth.signOut();
-              router.refresh();
-            }}
+            onClick={handleClearSession}
             className="text-zinc-400 hover:text-zinc-100 transition"
           >
             Clear session
