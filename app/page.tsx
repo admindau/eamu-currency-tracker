@@ -9,75 +9,84 @@ import {
 
 export const metadata: Metadata = {
   title:
-    "EAMU Currency Tracker – FX dashboard for East African Monetary Union",
+    "Savvy Rilla FX API – Real-time FX infrastructure for SSP & key global currencies",
   description:
-    "Public, read-only FX dashboard focused on currencies of the East African Monetary Union. Track key rates, trends, and insights, powered by Savvy Gorilla Technologies.",
+    "Public, read-only FX API for South Sudanese Pound (SSP) market data, built by Savvy Gorilla Technologies. Track USD/SSP, GBP/SSP, EUR/SSP and more, and integrate FX data into your applications with a clean, versioned API.",
   openGraph: {
-    title: "EAMU Currency Tracker – FX dashboard for EAMU",
+    title:
+      "Savvy Rilla FX API – Real-time FX infrastructure for SSP & key global currencies",
     description:
-      "Regional FX monitoring for East African Monetary Union currencies, with real-time data and smart insights. Built by Savvy Gorilla Technologies™.",
-    url: "https://eamu.savvyrilla.tech",
-    siteName: "EAMU Currency Tracker",
+      "Regional FX infrastructure powering Savvy Rilla FX, EAMU FX, and related dashboards. Built by Savvy Gorilla Technologies.",
+    url: "https://fx.savvyrilla.tech",
+    siteName: "Savvy Rilla FX API",
     type: "website",
     images: [
       {
-        url: "https://eamu.savvyrilla.tech/og-eamu-fx.png",
+        url: "/og-fx-api.png",
         width: 1200,
         height: 630,
-        alt: "EAMU Currency Tracker – FX snapshot for East African Monetary Union",
+        alt: "Savvy Rilla FX API – Real-time FX infrastructure",
       },
     ],
   },
-  twitter: {
-    card: "summary_large_image",
-    title: "EAMU Currency Tracker – FX dashboard for EAMU",
-    description:
-      "FX dashboard for East African Monetary Union currencies, powered by Savvy Gorilla Technologies™.",
-    images: ["https://eamu.savvyrilla.tech/og-eamu-fx.png"],
-  },
 };
 
-export const dynamic = "force-dynamic";
-
-type LatestRatesResponse = {
-  base: string;
-  as_of_date: string;
-  source?: string;
-  rates: Record<string, number>;
+type HistoryPoint = {
+  date: string;
+  mid: number;
 };
 
 type HistoryResponse = {
   pair: string;
   base: string;
   quote: string;
-  points: { date: string; mid: number }[];
-  meta: { from: string; to: string; count: number };
+  points: HistoryPoint[];
+  meta: {
+    from: string;
+    to: string;
+    count: number;
+  };
+};
+
+type RecentRate = {
+  id: number;
+  as_of_date: string;
+  base_currency: string;
+  quote_currency: string;
+  rate_mid: number;
+  is_official: boolean | null;
+  is_manual_override: boolean | null;
+  source_id: number | null;
 };
 
 type RecentRatesResponse = {
-  data: {
-    id: number;
-    as_of_date: string;
-    base_currency: string;
-    quote_currency: string;
-    rate_mid: number;
-    is_official: boolean | null;
-    is_manual_override: boolean | null;
-    source_id: number | null;
-  }[];
+  data: RecentRate[];
   meta: {
     limit: number;
     base: string;
   };
 };
 
+type CurrencyOverview = {
+  code: string;
+  name: string;
+  region: string;
+  latest_mid: number | null;
+  latest_date: string | null;
+  day_change_pct: number | null;
+};
+
+type SummaryMarketResponse = MarketSummary;
+
 function getApiBaseUrl() {
   if (process.env.NEXT_PUBLIC_FX_API_ORIGIN) {
     return process.env.NEXT_PUBLIC_FX_API_ORIGIN;
   }
+
   if (process.env.VERCEL_URL) {
     return `https://${process.env.VERCEL_URL}`;
   }
+
   return "http://localhost:3000";
 }
 
@@ -102,28 +111,167 @@ async function fetchJson<T>(path: string): Promise<T | null> {
   }
 }
 
-/**
- * Simple rule-based “AI-style” commentary for USD/SSP,
- * built from the summary + 30d range.
- *
- * We keep this pair as a key focus pair for the region.
- */
-function buildUsdSspCommentary(
-  summary: MarketSummary,
-  opts: { min30: number | null; max30: number | null }
-): string {
-  const { min30, max30 } = opts;
-  const date = summary.as_of_date ?? "today";
-  const mid = summary.mid_rate;
-  const change = summary.change_pct_vs_previous ?? null;
-  const trendLabel = summary.trend?.label ?? "Range-Bound";
+function buildEamuOverview(summary: SummaryMarketResponse | null): {
+  anchor: CurrencyOverview;
+  members: CurrencyOverview[];
+} {
+  const base = "SSP";
 
-  if (mid == null) {
-    return `USD/SSP summary data is not available for ${date}.`;
+  const dummy: CurrencyOverview = {
+    code: "USD",
+    name: "United States Dollar",
+    region: "Anchor",
+    latest_mid: null,
+    latest_date: null,
+    day_change_pct: null,
+  };
+
+  if (!summary) {
+    return {
+      anchor: dummy,
+      members: [
+        {
+          code: "KES",
+          name: "Kenyan Shilling",
+          region: "Kenya",
+          latest_mid: null,
+          latest_date: null,
+          day_change_pct: null,
+        },
+        {
+          code: "UGX",
+          name: "Ugandan Shilling",
+          region: "Uganda",
+          latest_mid: null,
+          latest_date: null,
+          day_change_pct: null,
+        },
+        {
+          code: "TZS",
+          name: "Tanzanian Shilling",
+          region: "Tanzania",
+          latest_mid: null,
+          latest_date: null,
+          day_change_pct: null,
+        },
+        {
+          code: "RWF",
+          name: "Rwandan Franc",
+          region: "Rwanda",
+          latest_mid: null,
+          latest_date: null,
+          day_change_pct: null,
+        },
+        {
+          code: "BIF",
+          name: "Burundian Franc",
+          region: "Burundi",
+          latest_mid: null,
+          latest_date: null,
+          day_change_pct: null,
+        },
+        {
+          code: "CDF",
+          name: "Congolese Franc",
+          region: "DR Congo",
+          latest_mid: null,
+          latest_date: null,
+          day_change_pct: null,
+        },
+        {
+          code: "SOS",
+          name: "Somali Shilling",
+          region: "Somalia",
+          latest_mid: null,
+          latest_date: null,
+          day_change_pct: null,
+        },
+      ],
+    };
   }
 
+  const anchor: CurrencyOverview = {
+    code: summary.quote,
+    name: "United States Dollar",
+    region: "Anchor",
+    latest_mid: summary.mid_rate ?? null,
+    latest_date: summary.as_of_date ?? null,
+    day_change_pct: summary.change_pct_vs_previous ?? null,
+  };
+
+  const members: CurrencyOverview[] = [
+    {
+      code: "KES",
+      name: "Kenyan Shilling",
+      region: "Kenya",
+      latest_mid: null,
+      latest_date: null,
+      day_change_pct: null,
+    },
+    {
+      code: "UGX",
+      name: "Ugandan Shilling",
+      region: "Uganda",
+      latest_mid: null,
+      latest_date: null,
+      day_change_pct: null,
+    },
+    {
+      code: "TZS",
+      name: "Tanzanian Shilling",
+      region: "Tanzania",
+      latest_mid: null,
+      latest_date: null,
+      day_change_pct: null,
+    },
+    {
+      code: "RWF",
+      name: "Rwandan Franc",
+      region: "Rwanda",
+      latest_mid: null,
+      latest_date: null,
+      day_change_pct: null,
+    },
+    {
+      code: "BIF",
+      name: "Burundian Franc",
+      region: "Burundi",
+      latest_mid: null,
+      latest_date: null,
+      day_change_pct: null,
+    },
+    {
+      code: "CDF",
+      name: "Congolese Franc",
+      region: "DR Congo",
+      latest_mid: null,
+      latest_date: null,
+      day_change_pct: null,
+    },
+    {
+      code: "SOS",
+      name: "Somali Shilling",
+      region: "Somalia",
+      latest_mid: null,
+      latest_date: null,
+      day_change_pct: null,
+    },
+  ];
+
+  return { anchor, members };
+}
+
+function buildDailyCommentary(summary: SummaryMarketResponse | null): string {
+  if (!summary || !summary.as_of_date || summary.mid_rate == null) {
+    return "USD/SSP commentary will appear here once enough fixing history is available from the FX engine.";
+  }
+
+  const { as_of_date: date, mid_rate: mid, change_pct_vs_previous: change } =
+    summary;
+
   const midStr = mid.toLocaleString("en-US", {
-    maximumFractionDigits: 4,
+    minimumFractionDigits: 3,
+    maximumFractionDigits: 3,
   });
 
   let sentence1: string;
@@ -138,131 +286,72 @@ function buildUsdSspCommentary(
       sentence1 = `On ${date}, USD/SSP was broadly unchanged, fixing at ${midStr} (${changeStr} vs the previous fixing).`;
     } else if (changeAbs < 0.3) {
       sentence1 =
-        change > 0
-          ? `On ${date}, USD/SSP edged higher to ${midStr} (${changeStr} vs the previous fixing).`
-          : `On ${date}, USD/SSP eased lower to ${midStr} (${changeStr} vs the previous fixing).`;
+        `On ${date}, USD/SSP eased ` +
+        `${change >= 0 ? "higher" : "lower"}, fixing at ${midStr} ` +
+        `(${changeStr} vs the previous fixing).`;
     } else {
       sentence1 =
-        change > 0
-          ? `On ${date}, USD/SSP moved notably higher to ${midStr} (${changeStr} vs the previous fixing).`
-          : `On ${date}, USD/SSP weakened noticeably to ${midStr} (${changeStr} vs the previous fixing).`;
+        `On ${date}, USD/SSP moved ` +
+        `${change >= 0 ? "sharply higher" : "sharply lower"}, fixing at ${midStr} ` +
+        `(${changeStr} vs the previous fixing).`;
     }
   }
 
+  const trend = summary.trend;
   let sentence2 = "";
-  if (min30 != null && max30 != null) {
-    const minStr = min30.toLocaleString("en-US", {
-      maximumFractionDigits: 2,
-    });
-    const maxStr = max30.toLocaleString("en-US", {
-      maximumFractionDigits: 2,
-    });
-    sentence2 = ` Over the last 30 days, the pair has traded between ${minStr} and ${maxStr}.`;
+
+  if (trend && Number.isFinite(trend.score)) {
+    if (trend.score >= 0.7) {
+      sentence2 =
+        " Over the past 30 days, the pair has traded with a strong directional bias, as captured by the current trend signal.";
+    } else if (trend.score >= 0.35) {
+      sentence2 =
+        " Over the past month, the trend signal points to a modest but persistent directional bias, with some mean reversion along the way.";
+    } else if (trend.score >= 0.05) {
+      sentence2 =
+        " Recent price action has been mixed, with the trend signal pointing to a largely range-bound market.";
+    } else {
+      sentence2 =
+        " Price action over the last month has been largely range-bound, with limited directional conviction in either direction.";
+    }
   }
 
-  let sentence3 = "";
-  if (trendLabel) {
-    sentence3 = ` Current trend signal is “${trendLabel}”, pointing to a ${trendLabel.toLowerCase()} market regime.`;
-  }
-
-  return `${sentence1}${sentence2}${sentence3}`.trim();
+  return (
+    sentence1 +
+    sentence2 +
+    " This commentary is generated automatically from the underlying fixing history and may be updated as new data arrives."
+  );
 }
 
-const EAMU_COUNTRIES = [
-  { code: "SSP", name: "South Sudan", flag: "🇸🇸" },
-  { code: "KES", name: "Kenya", flag: "🇰🇪" },
-  { code: "UGX", name: "Uganda", flag: "🇺🇬" },
-  { code: "TZS", name: "Tanzania", flag: "🇹🇿" },
-  { code: "RWF", name: "Rwanda", flag: "🇷🇼" },
-  { code: "BIF", name: "Burundi", flag: "🇧🇮" },
-  { code: "CDF", name: "DR Congo", flag: "🇨🇩" },
-  { code: "SOS", name: "Somalia", flag: "🇸🇴" },
-];
+export const dynamic = "force-dynamic";
 
 export default async function HomePage() {
-  const [
-    latestRates,
-    usdSummary,
-    history30,
-    history90,
-    history365,
-    recentRates,
-  ] = await Promise.all([
-    // We keep SSP as base for now, reusing the same FX infra.
-    fetchJson<LatestRatesResponse>("/api/v1/rates/latest?base=SSP"),
-    fetchJson<MarketSummary>("/api/v1/summary/market?base=SSP&quote=USD"),
-    fetchJson<HistoryResponse>(
-      "/api/v1/rates/history?base=SSP&quote=USD&days=30"
-    ),
-    fetchJson<HistoryResponse>(
-      "/api/v1/rates/history?base=SSP&quote=USD&days=90"
-    ),
+  const [history, recent, summary] = await Promise.all([
     fetchJson<HistoryResponse>(
       "/api/v1/rates/history?base=SSP&quote=USD&days=365"
     ),
-    fetchJson<RecentRatesResponse>("/api/v1/rates/recent?base=SSP&limit=10"),
+    fetchJson<RecentRatesResponse>("/api/v1/rates/recent?base=SSP&limit=50"),
+    fetchJson<SummaryMarketResponse>("/api/v1/summary/market?base=SSP&quote=USD"),
   ]);
 
-  const latestDate = latestRates?.as_of_date ?? "-";
-  const latestBase = latestRates?.base ?? "SSP";
+  const points = history?.points ?? [];
+  const summaryInsights = summary ? buildInsightsFromSummary(summary) : null;
+  const commentary = buildDailyCommentary(summary);
 
-  const usdMid = usdSummary?.mid_rate ?? null;
-  const usdChangePct = usdSummary?.change_pct_vs_previous ?? null;
+  const { anchor, members } = buildEamuOverview(summary);
 
-  const usdMin30 =
-    history30?.points && history30.points.length > 0
-      ? Math.min(...history30.points.map((p) => p.mid))
-      : null;
-  const usdMax30 =
-    history30?.points && history30.points.length > 0
-      ? Math.max(...history30.points.map((p) => p.mid))
-      : null;
-
-  const latestRatesArray =
-    latestRates?.rates
-      ? Object.entries(latestRates.rates).sort(([a], [b]) =>
-          a.localeCompare(b)
-        )
+  const series =
+    points.length > 0
+      ? [
+          {
+            label: "365d",
+            days: 365,
+            points,
+          },
+        ]
       : [];
 
-  const fxInsights = usdSummary ? buildInsightsFromSummary(usdSummary) : [];
-
-  const historySeries = [
-    {
-      label: "30d",
-      days: 30,
-      points: history30?.points ?? [],
-    },
-    {
-      label: "90d",
-      days: 90,
-      points: history90?.points ?? [],
-    },
-    {
-      label: "365d",
-      days: 365,
-      points: history365?.points ?? [],
-    },
-  ].filter((s) => s.points.length > 1);
-
-  const usdCommentary =
-    usdSummary != null
-      ? buildUsdSspCommentary(usdSummary, {
-          min30: usdMin30,
-          max30: usdMax30,
-        })
-      : null;
-
-  const eamuRates = EAMU_COUNTRIES.map((country) => {
-    const rate =
-      latestRates && latestRates.rates
-        ? latestRates.rates[country.code]
-        : null;
-    return {
-      ...country,
-      rate,
-    };
-  }).filter((c) => typeof c.rate === "number" && !Number.isNaN(c.rate));
+  const recentRows = recent?.data ?? [];
 
   return (
     <main className="min-h-screen bg-black text-zinc-100">
@@ -292,6 +381,12 @@ export default async function HomePage() {
 
             <div className="flex items-center gap-3 text-xs">
               <Link
+                href="/central-bank"
+                className="rounded-full border border-amber-500/40 bg-amber-500/10 px-3 py-1.5 text-xs font-medium text-amber-400 hover:bg-amber-500/20 hover:border-amber-400 transition"
+              >
+                Switch to Central Bank Mode
+              </Link>
+              <Link
                 href="/docs"
                 className="rounded-full border border-zinc-700 bg-zinc-900 px-3 py-1.5 text-xs font-medium text-zinc-100 hover:border-zinc-500 hover:bg-zinc-800 transition"
               >
@@ -300,15 +395,14 @@ export default async function HomePage() {
             </div>
           </div>
 
-          {/* Rasta accent bar */}
           <div className="h-1 w-full rounded-full bg-gradient-to-r from-red-500 via-amber-400 to-emerald-500" />
         </header>
 
-        {/* Hero + key pair card */}
+        {/* Hero + key stat */}
         <section className="grid gap-8 md:grid-cols-[minmax(0,1.4fr)_minmax(0,1fr)] items-start">
           <div className="space-y-5">
             <p className="text-[0.7rem] uppercase tracking-[0.25em] text-zinc-500">
-              EAMU Currency Tracker
+              Savvy Rilla FX API
             </p>
             <h1 className="text-3xl font-semibold tracking-tight sm:text-4xl">
               Real-time FX dashboard for East African Monetary Union currencies.
@@ -319,411 +413,299 @@ export default async function HomePage() {
               insights across EAMU currencies in a single, public interface.
             </p>
 
-            <p className="text-xs text-zinc-500">
-              Powered by{" "}
-              <span className="font-medium text-zinc-200">
-                Savvy Gorilla Technologies™
+            <div className="flex flex-wrap items-center gap-3 text-xs text-zinc-500">
+              <span className="inline-flex items-center gap-1 rounded-full border border-zinc-800 bg-zinc-950 px-2.5 py-1">
+                <span className="h-1.5 w-1.5 rounded-full bg-emerald-400" />
+                Live from v1 API
               </span>
-              .
-            </p>
+              <span>Base currency: SSP</span>
+              <span className="hidden sm:inline text-zinc-600">•</span>
+              <span>Anchor pair: USD/SSP</span>
+            </div>
 
-            <div className="flex flex-wrap gap-3 pt-2">
+            {/* Anchor pair card */}
+            <div className="rounded-2xl border border-zinc-800 bg-zinc-950/70 p-4 text-sm">
+              <div className="flex items-center justify-between gap-3">
+                <div>
+                  <p className="text-[0.65rem] uppercase tracking-[0.2em] text-zinc-500">
+                    Regional anchor
+                  </p>
+                  <p className="text-sm font-medium">USD / SSP</p>
+                </div>
+                <span className="rounded-full bg-emerald-500/10 px-2.5 py-1 text-[0.7rem] font-medium text-emerald-400">
+                  Public read-only
+                </span>
+              </div>
+
+              <div className="mt-3 grid grid-cols-3 gap-4 border-t border-zinc-800 pt-3 text-sm">
+                <div>
+                  <p className="text-[0.65rem] uppercase tracking-[0.2em] text-zinc-500">
+                    Mid rate
+                  </p>
+                  <p className="text-lg font-semibold">
+                    {anchor.latest_mid != null
+                      ? anchor.latest_mid.toLocaleString("en-US", {
+                          maximumFractionDigits: 3,
+                        })
+                      : "—"}
+                  </p>
+                  <p className="text-[0.7rem] text-zinc-500">
+                    {anchor.latest_date ?? "No recent fixing"}
+                  </p>
+                </div>
+
+                <div>
+                  <p className="text-[0.65rem] uppercase tracking-[0.2em] text-zinc-500">
+                    Day change
+                  </p>
+                  <p
+                    className={
+                      anchor.day_change_pct == null
+                        ? "text-sm"
+                        : anchor.day_change_pct >= 0
+                        ? "text-sm font-medium text-emerald-400"
+                        : "text-sm font-medium text-red-400"
+                    }
+                  >
+                    {anchor.day_change_pct == null
+                      ? "—"
+                      : `${anchor.day_change_pct >= 0 ? "+" : ""}${anchor.day_change_pct.toFixed(
+                          2
+                        )}%`}
+                  </p>
+                  <p className="text-[0.7rem] text-zinc-500">
+                    vs previous fixing
+                  </p>
+                </div>
+
+                <div>
+                  <p className="text-[0.65rem] uppercase tracking-[0.2em] text-zinc-500">
+                    Trend (experimental)
+                  </p>
+                  <p className="text-sm">
+                    {summaryInsights?.shortLabel ?? "Range-bound"}
+                  </p>
+                  <p className="text-[0.7rem] text-zinc-500">
+                    {summaryInsights?.hint ?? "Waiting for more history."}
+                  </p>
+                </div>
+              </div>
+            </div>
+
+            {/* Call-to-actions */}
+            <div className="flex flex-wrap items-center gap-3">
               <Link
-                href="/docs"
-                className="rounded-full bg-zinc-100 px-4 py-2 text-xs font-semibold text-black hover:bg-white transition"
+                href="/api"
+                className="rounded-full bg-white text-black px-4 py-2 text-sm font-medium hover:bg-zinc-200 transition"
               >
                 Get started with the API
               </Link>
-              <a
-                href="#eamu-overview"
-                className="rounded-full border border-zinc-700 px-4 py-2 text-xs font-medium text-zinc-100 hover:border-zinc-500 hover:bg-zinc-900 transition"
+              <Link
+                href="#recent"
+                className="rounded-full border border-zinc-700 px-4 py-2 text-sm font-medium hover:bg-zinc-900 transition"
               >
-                View EAMU overview
-              </a>
-            </div>
-
-            <div className="flex flex-wrap gap-6 pt-4 text-xs text-zinc-500">
-              <div>
-                <p className="text-[0.65rem] uppercase tracking-[0.2em] text-zinc-500">
-                  Base currency
-                </p>
-                <p className="text-sm text-zinc-200">{latestBase}</p>
-              </div>
-              <div>
-                <p className="text-[0.65rem] uppercase tracking-[0.2em] text-zinc-500">
-                  Latest fixing date
-                </p>
-                <p className="text-sm text-zinc-200">{latestDate}</p>
-              </div>
-              <div>
-                <p className="text-[0.65rem] uppercase tracking-[0.2em] text-zinc-500">
-                  API version
-                </p>
-                <p className="text-sm text-zinc-200">v1 · public read-only</p>
-              </div>
+                View recent USD/SSP history
+              </Link>
             </div>
           </div>
 
-          {/* USD/SSP overview card */}
-          <div className="rounded-2xl border border-zinc-800 bg-zinc-950/70 p-5 text-sm space-y-4">
-            <div className="flex items-center justify-between gap-2">
+          {/* History chart */}
+          <div className="rounded-2xl border border-zinc-800 bg-zinc-950/70 p-4 text-xs">
+            <div className="flex items-center justify-between gap-3">
               <div>
                 <p className="text-[0.65rem] uppercase tracking-[0.2em] text-zinc-500">
-                  Key pair · Regional anchor
+                  USD/SSP history
                 </p>
-                <p className="text-sm font-medium">USD / SSP</p>
-              </div>
-              <span className="rounded-full bg-emerald-500/10 px-3 py-1 text-[0.7rem] font-medium text-emerald-400">
-                Live from v1 API
-              </span>
-            </div>
-
-            <div className="grid grid-cols-2 gap-4 border-y border-zinc-800 py-4">
-              <div className="space-y-1">
-                <p className="text-[0.65rem] uppercase tracking-[0.2em] text-zinc-500">
-                  Mid rate
-                </p>
-                <p className="text-lg font-semibold">
-                  {usdMid
-                    ? usdMid.toLocaleString("en-US", {
-                        maximumFractionDigits: 4,
-                      })
-                    : "—"}
-                </p>
-                <p className="text-[0.7rem] text-zinc-500">
-                  {usdSummary?.as_of_date ?? "No data"}
+                <p className="text-sm font-medium">
+                  365-day anchor pair trajectory
                 </p>
               </div>
-              <div className="space-y-1">
-                <p className="text-[0.65rem] uppercase tracking-[0.2em] text-zinc-500">
-                  Day change
-                </p>
-                <p
-                  className={
-                    usdChangePct == null
-                      ? "text-sm"
-                      : usdChangePct >= 0
-                      ? "text-sm font-medium text-emerald-400"
-                      : "text-sm font-medium text-red-400"
-                  }
-                >
-                  {usdChangePct == null
-                    ? "—"
-                    : `${usdChangePct >= 0 ? "+" : ""}${usdChangePct.toFixed(
-                        2
-                      )}%`}
-                </p>
-                <p className="text-[0.7rem] text-zinc-500">vs previous fixing</p>
-              </div>
-            </div>
-
-            <div className="grid grid-cols-2 gap-4 text-xs">
-              <div>
-                <p className="text-[0.65rem] uppercase tracking-[0.2em] text-zinc-500">
-                  30d range
-                </p>
-                <p className="text-zinc-200">
-                  {usdMin30 && usdMax30
-                    ? `${usdMin30.toLocaleString("en-US", {
-                        maximumFractionDigits: 2,
-                      })} – ${usdMax30.toLocaleString("en-US", {
-                        maximumFractionDigits: 2,
-                      })}`
-                    : "—"}
-                </p>
-              </div>
-              <div>
-                <p className="text-[0.65rem] uppercase tracking-[0.2em] text-zinc-500">
-                  Trend (experimental)
-                </p>
-                <p className="text-zinc-200">
-                  {usdSummary?.trend?.label ?? "Range-Bound"}
-                </p>
-              </div>
-            </div>
-
-            {/* History chart */}
-            {historySeries.length > 0 && <FxHistoryChart series={historySeries} />}
-
-            <p className="text-[0.7rem] text-zinc-500">
-              Snapshot powered by{" "}
-              <code className="rounded bg-zinc-900 px-1 py-0.5 text-[0.7rem]">
-                /api/v1/summary/market
+              <code className="rounded-full bg-zinc-950 px-2.5 py-1 text-[0.65rem] text-zinc-500 border border-zinc-800">
+                /api/v1/rates/history
               </code>
-              .
+            </div>
+
+            <div className="mt-3">
+              {series.length > 0 ? (
+                <FxHistoryChart series={series} />
+              ) : (
+                <div className="flex h-40 items-center justify-center text-[0.8rem] text-zinc-500">
+                  USD/SSP history will appear here once enough data is
+                  available.
+                </div>
+              )}
+            </div>
+
+            <p className="mt-2 text-[0.7rem] text-zinc-500">
+              This view uses the same history endpoint that powers the EAMU FX
+              dashboard and widget integrations. Use it to contextualise
+              short-term moves against the broader regime.
             </p>
-
-            {usdSummary && (
-              <>
-                {/* Daily FX commentary */}
-                {usdCommentary && (
-                  <div className="mt-3 border-t border-zinc-800 pt-3 text-xs">
-                    <p className="mb-1 text-[0.65rem] uppercase tracking-[0.2em] text-zinc-500">
-                      Daily FX commentary (beta)
-                    </p>
-                    <p className="text-[0.8rem] text-zinc-300 leading-relaxed">
-                      {usdCommentary}
-                    </p>
-                  </div>
-                )}
-
-                {/* Smart FX insights */}
-                <div className="mt-3 border-t border-zinc-800 pt-3 text-xs">
-                  <p className="mb-2 text-[0.65rem] uppercase tracking-[0.2em] text-zinc-500">
-                    Smart FX insights
-                  </p>
-
-                  {fxInsights.length === 0 ? (
-                    <p className="text-zinc-500 text-[0.75rem]">
-                      No insights available yet for this pair.
-                    </p>
-                  ) : (
-                    <ul className="space-y-1.5 text-[0.8rem] text-zinc-300">
-                      {fxInsights.map((insight, idx) => (
-                        <li key={idx} className="flex gap-2">
-                          <span className="mt-[6px] h-1 w-1 rounded-full bg-zinc-500" />
-                          <span>{insight}</span>
-                        </li>
-                      ))}
-                    </ul>
-                  )}
-                </div>
-
-                {/* Embed widget snippet */}
-                <div className="mt-3 border-t border-zinc-800 pt-3 text-[0.7rem] text-zinc-500 space-y-2">
-                  <p className="text-[0.65rem] uppercase tracking-[0.2em] text-zinc-500">
-                    Embed this snapshot
-                  </p>
-                  <p className="text-[0.7rem] text-zinc-400">
-                    Paste this snippet into any website to embed a live USD/SSP
-                    widget from the EAMU tracker.
-                  </p>
-                  <pre className="rounded-lg bg-zinc-950 border border-zinc-900 p-2 text-[0.65rem] overflow-x-auto text-zinc-300">
-{`<iframe
-  src="https://eamu.savvyrilla.tech/widget/usd-ssp"
-  width="360"
-  height="240"
-  style="border:0; background:#000; color:#fff;"
-  loading="lazy"
-  referrerpolicy="no-referrer-when-downgrade"
-></iframe>`}
-                  </pre>
-                </div>
-              </>
-            )}
           </div>
         </section>
 
         {/* EAMU overview */}
-        <section id="eamu-overview" className="space-y-6">
-          <div className="flex flex-wrap items-end justify_between gap-3">
+        <section className="space-y-4">
+          <div className="flex items-center justify-between gap-3">
             <div>
               <p className="text-[0.7rem] uppercase tracking-[0.25em] text-zinc-500">
-                EAMU overview
+                EAMU currency snapshot
               </p>
-              <h2 className="text-xl font-semibold tracking-tight">
-                Regional snapshot for 8 partner currencies
-              </h2>
-              <p className="text-sm text-zinc-400 max-w-xl">
-                A quick view of key East African Monetary Union currencies,
-                shown against the current base currency{" "}
-                <span className="font-medium text-zinc-200">
-                  ({latestBase})
-                </span>
-                . Rates and date are synced with the underlying FX engine.
+              <p className="text-sm text-zinc-400">
+                High-level view of EAMU and related currencies, anchored on
+                USD/SSP.
               </p>
             </div>
-            <div className="text-xs text-zinc-500">
-              Latest fixing date:{" "}
-              <span className="font-medium text-zinc-200">{latestDate}</span>
-            </div>
+            <Link
+              href="/widget/usd-ssp"
+              className="rounded-full border border-zinc-800 bg-zinc-950 px-3 py-1.5 text-[0.7rem] font-medium text-zinc-200 hover:border-zinc-600 hover:bg-zinc-900 transition"
+            >
+              View embeddable widget
+            </Link>
           </div>
 
-          <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-4">
-            {eamuRates.length === 0 ? (
-              <p className="text-sm text-zinc-500">
-                No EAMU currency data available yet for the current fixing.
+          <div className="grid gap-4 md:grid-cols-[minmax(0,1.2fr)_minmax(0,1fr)]">
+            {/* Anchor + commentary */}
+            <div className="rounded-2xl border border-zinc-800 bg-zinc-950/70 p-4 text-xs space-y-3">
+              <div className="flex items-center justify-between gap-3">
+                <div>
+                  <p className="text-[0.65rem] uppercase tracking-[0.2em] text-zinc-500">
+                    Anchor commentary (beta)
+                  </p>
+                  <p className="text-sm font-medium">USD/SSP daily note</p>
+                </div>
+                <code className="rounded-full bg-zinc-950 px-2.5 py-1 text-[0.65rem] text-zinc-500 border border-zinc-800">
+                  /api/v1/summary/market
+                </code>
+              </div>
+              <p className="text-[0.8rem] leading-relaxed text-zinc-300">
+                {commentary}
               </p>
-            ) : (
-              eamuRates.map((country) => (
-                <div
-                  key={country.code}
-                  className="rounded-2xl border border-zinc-800 bg-zinc-950/70 p-4 text-sm flex flex-col gap-3"
-                >
-                  <div className="h-1 w-full rounded-full bg-gradient-to-r from-red-500 via-amber-400 to-emerald-500" />
-                  <div className="flex items-center justify-between gap-2">
-                    <div>
-                      <p className="text-xs text-zinc-500">
-                        {country.flag} {country.name}
-                      </p>
-                      <p className="text-sm font-semibold text-zinc-100">
-                        {country.code} / {latestBase}
-                      </p>
-                    </div>
-                  </div>
-                  <div className="space-y-1">
-                    <p className="text-[0.65rem] uppercase tracking-[0.2em] text-zinc-500">
-                      Mid rate
-                    </p>
-                    <p className="text-lg font-semibold">
-                      {typeof country.rate === "number"
-                        ? country.rate.toLocaleString("en-US", {
-                            maximumFractionDigits: 4,
-                          })
-                        : "—"}
-                    </p>
-                    <p className="text-[0.7rem] text-zinc-500">
-                      As of {latestDate}
-                    </p>
-                  </div>
-                  <p className="mt-auto text-[0.7rem] text-zinc-500">
-                    Data sourced from the same FX engine that powers the Savvy
-                    Rilla FX API.
+              <p className="text-[0.7rem] text-zinc-500">
+                This paragraph is generated algorithmically from the same fixing
+                history used by Savvy Rilla FX. Treat it as a starting point for
+                human analysis, not as investment advice.
+              </p>
+            </div>
+
+            {/* Members grid */}
+            <div className="rounded-2xl border border-zinc-800 bg-zinc-950/70 p-4 text-xs space-y-3">
+              <div className="flex items-center justify-between gap-3">
+                <div>
+                  <p className="text-[0.65rem] uppercase tracking-[0.2em] text-zinc-500">
+                    EAMU members (currency view)
+                  </p>
+                  <p className="text-sm font-medium">
+                    Regional currencies tracked by the engine
                   </p>
                 </div>
-              ))
-            )}
+              </div>
+              <div className="grid grid-cols-2 gap-3 text-[0.8rem]">
+                {members.map((m) => (
+                  <div
+                    key={m.code}
+                    className="rounded-xl border border-zinc-800 bg-zinc-950/80 px-3 py-2"
+                  >
+                    <div className="flex items-center justify-between gap-2">
+                      <div>
+                        <p className="text-xs font-semibold text-zinc-100">
+                          {m.region}
+                        </p>
+                        <p className="text-[0.7rem] text-zinc-500">
+                          {m.code} – {m.name}
+                        </p>
+                      </div>
+                      <span className="rounded-full bg-zinc-900 px-2 py-0.5 text-[0.65rem] text-zinc-400">
+                        v1 snapshot
+                      </span>
+                    </div>
+                    <div className="mt-1 text-[0.7rem] text-zinc-500">
+                      <p>Rates vs USD/SSP coming online as history builds.</p>
+                    </div>
+                  </div>
+                ))}
+              </div>
+              <p className="text-[0.7rem] text-zinc-500">
+                Currency coverage will expand over time as more history is
+                collected and stabilised across the region.
+              </p>
+            </div>
           </div>
         </section>
 
-        {/* FX Dashboard (full table + recent records) */}
-        <section id="fx-dashboard" className="space-y-6">
-          <div className="flex flex-wrap items-end justify-between gap-3">
+        {/* Recent table */}
+        <section id="recent" className="space-y-4">
+          <div className="flex items-center justify-between gap-3">
             <div>
               <p className="text-[0.7rem] uppercase tracking-[0.25em] text-zinc-500">
-                FX dashboard
+                Recent USD/SSP records
               </p>
-              <h2 className="text-xl font-semibold tracking-tight">
-                Public FX board for regional analysts
-              </h2>
-              <p className="text-sm text-zinc-400 max-w-xl">
-                A simple, read-only view backed by the same FX data used by
-                internal tools. Ideal for analysts, journalists, and developers
-                who want a quick glance before diving into the API.
+              <p className="text-sm text-zinc-400">
+                The same recent dataset used by the widget and commentary
+                engine.
               </p>
             </div>
-            <div className="text-xs text-zinc-500">
-              Latest fixing date:{" "}
-              <span className="font-medium text-zinc-200">{latestDate}</span>
+            <div className="flex flex-wrap items-center gap-2 text-[0.7rem] text-zinc-500">
+              <code className="rounded-full bg-zinc-950 px-2.5 py-1 border border-zinc-800">
+                GET /api/v1/rates/recent?base=SSP&amp;limit=50
+              </code>
+              <span>•</span>
+              <span>Sorted by most recent fixing first</span>
             </div>
           </div>
 
-          <div className="grid gap-6 lg:grid-cols-[minmax(0,1.4fr)_minmax(0,1fr)]">
-            {/* Left: Latest rates grid */}
-            <div className="space-y-3">
-              <div className="flex items-center justify-between gap-2 text-xs">
-                <p className="text-zinc-400">
-                  Latest mid rates vs{" "}
-                  <span className="font-medium text-zinc-100">
-                    {latestBase}
-                  </span>
-                </p>
-                <code className="rounded-full bg-zinc-950 px-3 py-1 text-[0.65rem] text-zinc-500 border border-zinc-800">
-                  GET /api/v1/rates/latest
-                </code>
-              </div>
-
-              <div className="overflow-hidden rounded-2xl border border-zinc-800 bg-zinc-950/70">
-                <div className="grid grid-cols-3 border-b border-zinc-800 bg-zinc-950/90 text-[0.7rem] text-zinc-400">
-                  <div className="px-3 py-2">Quote</div>
-                  <div className="px-3 py-2 text-right">Mid rate</div>
-                  <div className="px-3 py-2 text-right">Approx per 1 unit</div>
-                </div>
-                <div className="max-h-64 overflow-y-auto text-xs">
-                  {latestRatesArray.length === 0 ? (
-                    <div className="px-3 py-4 text-zinc-500 text-[0.8rem]">
-                      No rates available yet.
-                    </div>
-                  ) : (
-                    latestRatesArray.map(([code, rate]) => (
-                      <div
-                        key={code}
-                        className="grid grid-cols-3 border-t border-zinc-900/80 px-3 py-2"
-                      >
-                        <div className="flex items-center gap-2">
-                          <span className="font-medium text-zinc-100">
-                            {code}
-                          </span>
-                        </div>
-                        <div className="text-right text-zinc-100">
-                          {rate.toLocaleString("en-US", {
-                            maximumFractionDigits: 4,
-                          })}
-                        </div>
-                        <div className="text-right text-zinc-500">
-                          1 {code} ≈{" "}
-                          {rate === 0 ? "—" : (1 / rate).toFixed(6)}{" "}
-                          {latestBase}
-                        </div>
-                      </div>
-                    ))
-                  )}
-                </div>
-              </div>
+          <div className="rounded-2xl border border-zinc-800 bg-zinc-950/70 overflow-hidden text-xs">
+            <div className="grid grid-cols-[1.2fr_0.9fr_0.9fr_0.9fr] border-b border-zinc-800 bg-zinc-950/90 text-[0.7rem] text-zinc-400">
+              <div className="px-3 py-2">Date &amp; pair</div>
+              <div className="px-3 py-2 text-right">Mid rate</div>
+              <div className="px-3 py-2 text-right">Flags</div>
+              <div className="px-3 py-2 text-right">Source</div>
             </div>
-
-            {/* Right: Recent fixes */}
-            <div className="space-y-3">
-              <div className="flex items_center justify-between gap-2 text-xs">
-                <p className="text-zinc-400">
-                  Recent FX records{" "}
-                  <span className="text-zinc-500">(most recent first)</span>
-                </p>
-                <code className="rounded-full bg-zinc-950 px-3 py-1 text-[0.65rem] text-zinc-500 border border-zinc-800">
-                  GET /api/v1/rates/recent
-                </code>
-              </div>
-
-              <div className="overflow-hidden rounded-2xl border border-zinc-800 bg-zinc-950/70">
-                <div className="grid grid-cols-[1.1fr_0.8fr_0.7fr] border-b border-zinc-800 bg-zinc-950/90 text-[0.7rem] text-zinc-400">
-                  <div className="px-3 py-2">Date · Pair</div>
-                  <div className="px-3 py-2 text-right">Mid rate</div>
-                  <div className="px-3 py-2 text-right">Flags</div>
-                </div>
-                <div className="max-h-64 overflow-y-auto text-xs">
-                  {recentRates?.data && recentRates.data.length > 0 ? (
-                    recentRates.data.map((row) => (
-                      <div
-                        key={row.id}
-                        className="grid grid-cols-[1.1fr_0.8fr_0.7fr] border-t border-zinc-900/80 px-3 py-2"
-                      >
-                        <div>
-                          <p className="text-zinc-100">{row.as_of_date}</p>
-                          <p className="text-[0.7rem] text-zinc-500">
-                            {row.base_currency}/{row.quote_currency}
-                          </p>
-                        </div>
-                        <div className="text-right text-zinc-100">
-                          {row.rate_mid.toLocaleString("en-US", {
-                            maximumFractionDigits: 4,
-                          })}
-                        </div>
-                        <div className="text-right text-[0.7rem] text-zinc-500 space-y-0.5">
-                          {row.is_official && (
-                            <div className="inline-flex items-center gap-1 rounded-full bg-emerald-500/10 px-2 py-0.5 text-emerald-400">
-                              <span className="h-1.5 w-1.5 rounded-full bg-emerald-400" />
-                              Official
-                            </div>
-                          )}
-                          {row.is_manual_override && (
-                            <div className="inline-flex items-center gap-1 rounded-full bg-amber-500/10 px-2 py-0.5 text-amber-400">
-                              <span className="h-1.5 w-1.5 rounded-full bg-amber-400" />
-                              Manual
-                            </div>
-                          )}
-                          {!row.is_official && !row.is_manual_override && (
-                            <span className="text-zinc-600">—</span>
-                          )}
-                        </div>
-                      </div>
-                    ))
-                  ) : (
-                    <div className="px-3 py-4 text-zinc-500 text-[0.8rem]">
-                      No recent records available.
+            <div className="max-h-72 overflow-y-auto">
+              {recentRows.length > 0 ? (
+                recentRows.map((row) => (
+                  <div
+                    key={row.id}
+                    className="grid grid-cols-[1.2fr_0.9fr_0.9fr_0.9fr] border-t border-zinc-900/80 px-3 py-2"
+                  >
+                    <div>
+                      <p className="text-zinc-100">{row.as_of_date}</p>
+                      <p className="text-[0.7rem] text-zinc-500">
+                        {row.base_currency}/{row.quote_currency}
+                      </p>
                     </div>
-                  )}
+                    <div className="text-right text-zinc-100">
+                      {row.rate_mid.toLocaleString("en-US", {
+                        maximumFractionDigits: 4,
+                      })}
+                    </div>
+                    <div className="text-right text-[0.7rem] text-zinc-500 space-y-0.5">
+                      {row.is_official && (
+                        <span className="inline-flex items-center gap-1 rounded-full bg-emerald-500/10 px-2 py-0.5 text-emerald-400">
+                          <span className="h-1.5 w-1.5 rounded-full bg-emerald-400" />
+                          Official fixing
+                        </span>
+                      )}
+                      {row.is_manual_override && (
+                        <span className="inline-flex items-center gap-1 rounded-full bg-amber-500/10 px-2 py-0.5 text-amber-400">
+                          <span className="h-1.5 w-1.5 rounded-full bg-amber-400" />
+                          Manual override
+                        </span>
+                      )}
+                      {!row.is_official && !row.is_manual_override && (
+                        <span className="text-zinc-600">—</span>
+                      )}
+                    </div>
+                    <div className="text-right text-[0.7rem] text-zinc-500">
+                      {row.source_id != null ? `Source #${row.source_id}` : "—"}
+                    </div>
+                  </div>
+                ))
+              ) : (
+                <div className="px-3 py-4 text-zinc-500 text-[0.8rem]">
+                  No recent records available.
                 </div>
-              </div>
+              )}
             </div>
           </div>
         </section>
@@ -731,30 +713,35 @@ export default async function HomePage() {
         {/* Footer */}
         <footer className="mt-4 border-t border-zinc-900 pt-4 text-[0.7rem] text-zinc-500">
           <div className="flex flex-wrap items-center justify-between gap-4">
-            {/* Left side */}
-            <div className="flex items-center gap-2">
-              <div className="relative h-4 w-4 opacity-60">
-                <Image
-                  src="/savvy-gorilla-logo-white.png"
-                  alt="Savvy Gorilla Technologies"
-                  fill
-                  className="object-contain"
-                />
-              </div>
-              <span className="text-zinc-400">
-                EAMU Currency Tracker · Public read-only interface
-              </span>
+            <div className="space-y-1">
+              <p>
+                Built on the same FX engine behind{" "}
+                <a
+                  href="https://fx.savvyrilla.tech"
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="text-zinc-300 hover:text-white transition"
+                >
+                  fx.savvyrilla.tech
+                </a>{" "}
+                and{" "}
+                <a
+                  href="https://eamu.savvyrilla.tech"
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="text-zinc-300 hover:text-white transition"
+                >
+                  EAMU FX
+                </a>
+                . This interface is public and read-only.
+              </p>
+              <p>
+                Data is provided as-is, without warranty, and should be used
+                alongside official publications and professional judgement.
+              </p>
             </div>
-
-            {/* Right side */}
-            <div className="flex flex-wrap items-center gap-3 text-zinc-500">
-              <span className="text-zinc-400">
-                Built by{" "}
-                <span className="text-zinc-200">
-                  Savvy Gorilla Technologies™
-                </span>
-              </span>
-
+            <div className="flex flex-wrap items-center gap-2">
+              <span className="text-zinc-600">Savvy Gorilla Technologies™</span>
               <span className="hidden sm:inline text-zinc-600">•</span>
 
               <span className="text-zinc-400">
