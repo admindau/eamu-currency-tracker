@@ -186,7 +186,6 @@ export default async function HomePage() {
     history30,
     history90,
     history365,
-    historyAll,
     recentRates,
   ] = await Promise.all([
     // We keep SSP as base for now, reusing the same FX infra.
@@ -201,8 +200,6 @@ export default async function HomePage() {
     fetchJson<HistoryResponse>(
       "/api/v1/rates/history?base=SSP&quote=USD&days=365"
     ),
-    // "All" history – backend can treat missing `days` as full history.
-    fetchJson<HistoryResponse>("/api/v1/rates/history?base=SSP&quote=USD"),
     fetchJson<RecentRatesResponse>("/api/v1/rates/recent?base=SSP&limit=10"),
   ]);
 
@@ -229,15 +226,6 @@ export default async function HomePage() {
       : [];
 
   const fxInsights = usdSummary ? buildInsightsFromSummary(usdSummary) : [];
-
-  // If "all" history is missing or super short, fall back to 365d series
-  const allHistoryPoints =
-    historyAll?.points && historyAll.points.length > 1
-      ? historyAll.points
-      : history365?.points ?? [];
-
-  // mark as used so TS doesn't complain, but we don't expose "All" in the chart
-  void allHistoryPoints;
 
   const historySeries = [
     {
@@ -528,7 +516,7 @@ export default async function HomePage() {
 
         {/* EAMU overview */}
         <section id="eamu-overview" className="space-y-6">
-          <div className="flex flex-wrap items-end justify-between gap-3">
+          <div className="flex flex-wrap items-end justify_between gap-3">
             <div>
               <p className="text-[0.7rem] uppercase tracking-[0.25em] text-zinc-500">
                 EAMU overview
@@ -676,7 +664,7 @@ export default async function HomePage() {
 
             {/* Right: Recent fixes */}
             <div className="space-y-3">
-              <div className="flex items-center justify-between gap-2 text-xs">
+              <div className="flex items_center justify-between gap-2 text-xs">
                 <p className="text-zinc-400">
                   Recent FX records{" "}
                   <span className="text-zinc-500">(most recent first)</span>
