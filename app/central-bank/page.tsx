@@ -253,19 +253,45 @@ function AdminAnalyticsPanel({
     );
   });
 
-  const data = {
+  // Build a lookup of overrides keyed by fixing date
+  const overrideLookup = new Map<string, ManualOverrideRow[]>();
+  for (const o of overridesInRange) {
+    const bucket = overrideLookup.get(o.as_of_date) ?? [];
+    bucket.push(o);
+    overrideLookup.set(o.as_of_date, bucket);
+  }
+
+  // Core engine history dataset
+  const engineSeries = {
+    label: "USD/SSP mid",
+    data: history.map((p) => p.mid),
+    borderColor: "rgba(244,244,245,0.9)",
+    backgroundColor: "rgba(24,24,27,0.8)",
+    borderWidth: 1.5,
+    pointRadius: 0,
+    tension: 0.15,
+  };
+
+  // Override markers – amber points on days where manual overrides exist
+  const overrideSeries = {
+    label: "Manual overrides",
+    data: history.map((p) => {
+      const rows = overrideLookup.get(p.date);
+      if (!rows || !rows.length) return null;
+      // Use the first override's rate_mid for the marker height
+      return rows[0].rate_mid;
+    }),
+    borderColor: "rgba(251,191,36,1)", // amber-400
+    backgroundColor: "rgba(251,191,36,1)",
+    borderWidth: 0,
+    pointRadius: 4,
+    pointHoverRadius: 6,
+    showLine: false,
+  };
+
+  const data: any = {
     labels: history.map((p) => p.date),
-    datasets: [
-      {
-        label: "USD/SSP mid",
-        data: history.map((p) => p.mid),
-        borderColor: "rgba(244,244,245,0.9)",
-        backgroundColor: "rgba(24,24,27,0.8)",
-        borderWidth: 1.5,
-        pointRadius: 0,
-        tension: 0.15,
-      },
-    ],
+    datasets: [engineSeries as any, overrideSeries as any],
   };
 
   const options: any = {
@@ -282,6 +308,32 @@ function AdminAnalyticsPanel({
           label: (ctx: any) => {
             const v = ctx.parsed.y;
             if (!Number.isFinite(v)) return "";
+
+            const datasetLabel = ctx.dataset.label as string;
+            const date = history[ctx.dataIndex]?.date;
+
+            if (datasetLabel === "Manual overrides") {
+              const rows = date ? overrideLookup.get(date) ?? [] : [];
+              const row = rows[0];
+              const engineMid = history[ctx.dataIndex]?.mid;
+              const delta =
+                Number.isFinite(engineMid) && Number.isFinite(row?.rate_mid)
+                  ? row.rate_mid - engineMid
+                  : undefined;
+
+              const base = `Manual override fixing: ${v.toLocaleString(
+                "en-US",
+                { maximumFractionDigits: 3 }
+              )}`;
+              if (delta === undefined) return base;
+              const sign = delta >= 0 ? "+" : "–";
+              const absDelta = Math.abs(delta);
+              return `${base} (${sign}${absDelta.toLocaleString("en-US", {
+                maximumFractionDigits: 3,
+              })} vs engine mid)`;
+            }
+
+            // Engine line
             return `USD/SSP mid: ${v.toLocaleString("en-US", {
               maximumFractionDigits: 3,
             })}`;
@@ -377,15 +429,13 @@ function AdminAnalyticsPanel({
 
       <p className="text-[0.7rem] text-zinc-500">
         In this window, the system has{" "}
-          <span className="text-zinc-200 font-medium">
-            {overridesInRange.length}
-          </span>{" "}
-          manual USD/SSP overrides captured in{" "}
-        <code className="rounded bg-zinc-900 px-1 py-0.5">
-          manual_fixings
-        </code>
-        . In a later phase, we can overlay these on the chart as markers to
-        visualise impact.
+        <span className="text-zinc-200 font-medium">
+          {overridesInRange.length}
+        </span>{" "}
+        manual USD/SSP overrides captured in{" "}
+        <code className="rounded bg-zinc-900 px-1 py-0.5">manual_fixings</code>.
+        Days with overrides are highlighted as amber markers on the chart so you
+        can see where policy actions intersect with market moves.
       </p>
     </div>
   );
