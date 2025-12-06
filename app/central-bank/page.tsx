@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useState, FormEvent } from "react";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
 import { getSupabaseBrowserClient } from "@/lib/supabase-browser";
@@ -18,7 +18,9 @@ type ManualOverrideRow = {
   rate_mid: number;
   is_official: boolean;
   is_manual_override: boolean;
-  created_by?: string | null;
+  notes: string | null;
+  created_email: string | null;
+  created_at: string;
 };
 
 export default function CentralBankDashboardPage() {
@@ -30,7 +32,23 @@ export default function CentralBankDashboardPage() {
 
   const [overrides, setOverrides] = useState<ManualOverrideRow[]>([]);
   const [loadingOverrides, setLoadingOverrides] = useState(true);
+  const [overridesError, setOverridesError] = useState<string | null>(null);
 
+  const [showForm, setShowForm] = useState(false);
+  const [savingForm, setSavingForm] = useState(false);
+  const [formError, setFormError] = useState<string | null>(null);
+
+  const today = new Date().toISOString().slice(0, 10);
+
+  const [formDate, setFormDate] = useState(today);
+  const [formBase, setFormBase] = useState("SSP");
+  const [formQuote, setFormQuote] = useState("USD");
+  const [formRate, setFormRate] = useState("");
+  const [formOfficial, setFormOfficial] = useState(true);
+  const [formOverride, setFormOverride] = useState(false);
+  const [formNotes, setFormNotes] = useState("");
+
+  // 1) Load authenticated user
   useEffect(() => {
     let isMounted = true;
 
@@ -41,7 +59,6 @@ export default function CentralBankDashboardPage() {
       if (!isMounted) return;
 
       if (error || !data?.user) {
-        // Not logged in → push to login page
         router.replace("/central-bank/login");
       } else {
         setUser({
@@ -60,35 +77,65 @@ export default function CentralBankDashboardPage() {
     };
   }, [router, supabase]);
 
+  // 2) Load manual fixings from Supabase (once user is available)
   useEffect(() => {
+    if (!user) return; // wait for auth
+
     let active = true;
 
     async function loadOverrides() {
       setLoadingOverrides(true);
+      setOverridesError(null);
 
       try {
-        // TODO: Wire this to a real admin endpoint once ready.
-        // For now, we keep a safe placeholder with no network call
-        // to avoid 404 noise in the console.
-        const mock: ManualOverrideRow[] = [
-          {
-            id: "example-1",
-            as_of_date: "2025-12-06",
-            base_currency: "SSP",
-            quote_currency: "USD",
-            rate_mid: 4550.644,
-            is_official: true,
-            is_manual_override: false,
-            created_by: "central.bank@example.gov",
-          },
-        ];
+        const { data, error } = await supabase
+          .from("manual_fixings")
+          .select(
+            `
+            id,
+            as_of_date,
+            base_currency,
+            quote_currency,
+            rate_mid,
+            is_official,
+            is_manual_override,
+            notes,
+            created_email,
+            created_at
+          `
+          )
+          .order("as_of_date", { ascending: false })
+          .limit(50);
 
-        if (active) {
-          setOverrides(mock);
+        if (!active) return;
+
+        if (error) {
+          console.error("Failed to load manual_fixings:", error);
+          setOverrides([]);
+          setOverridesError(
+            error.message ??
+              "Could not load manual fixings. Check that the table exists."
+          );
+        } else {
+          const normalised: ManualOverrideRow[] = (data ?? []).map((row) => ({
+            id: row.id,
+            as_of_date: row.as_of_date,
+            base_currency: row.base_currency,
+            quote_currency: row.quote_currency,
+            rate_mid: Number(row.rate_mid),
+            is_official: row.is_official,
+            is_manual_override: row.is_manual_override,
+            notes: row.notes ?? null,
+            created_email: row.created_email ?? null,
+            created_at: row.created_at,
+          }));
+          setOverrides(normalised);
         }
-      } catch (err) {
-        console.error("Failed to load manual overrides:", err);
-        if (active) setOverrides([]);
+      } catch (err: any) {
+        if (!active) return;
+        console.error("Unexpected loadOverrides error:", err);
+        setOverrides([]);
+        setOverridesError("Unexpected error loading manual fixings.");
       } finally {
         if (active) setLoadingOverrides(false);
       }
@@ -99,11 +146,94 @@ export default function CentralBankDashboardPage() {
     return () => {
       active = false;
     };
-  }, []);
+  }, [supabase, user]);
 
   async function handleSignOut() {
     await supabase.auth.signOut();
     router.replace("/central-bank/login");
+  }
+
+  async function handleCreateManualFixing(e: FormEvent) {
+    e.preventDefault();
+    if (!user) return;
+
+    setSavingForm(true);
+    setFormError(null);
+
+    const parsedRate = Number(formRate.replace(/,/g, ""));
+    if (!Number.isFinite(parsedRate) || parsedRate <= 0) {
+      setSavingForm(false);
+      setFormError("Please enter a valid positive rate.");
+      return;
+    }
+
+    try {
+      const { data, error } = await supabase
+        .from("manual_fixings")
+        .insert([
+          {
+            as_of_date: formDate,
+            base_currency: formBase,
+            quote_currency: formQuote,
+            rate_mid: parsedRate,
+            is_official: formOfficial,
+            is_manual_override: formOverride,
+            notes: formNotes.length ? formNotes : null,
+            created_by: user.id,
+            created_email: user.email ?? null,
+          },
+        ])
+        .select(
+          `
+          id,
+          as_of_date,
+          base_currency,
+          quote_currency,
+          rate_mid,
+          is_official,
+          is_manual_override,
+          notes,
+          created_email,
+          created_at
+        `
+        )
+        .single();
+
+      if (error) {
+        console.error("Failed to insert manual_fixings:", error);
+        setFormError(error.message ?? "Failed to save manual fixing.");
+        setSavingForm(false);
+        return;
+      }
+
+      const newRow: ManualOverrideRow = {
+        id: data.id,
+        as_of_date: data.as_of_date,
+        base_currency: data.base_currency,
+        quote_currency: data.quote_currency,
+        rate_mid: Number(data.rate_mid),
+        is_official: data.is_official,
+        is_manual_override: data.is_manual_override,
+        notes: data.notes ?? null,
+        created_email: data.created_email ?? null,
+        created_at: data.created_at,
+      };
+
+      // Prepend to list
+      setOverrides((prev) => [newRow, ...prev]);
+
+      // Reset form
+      setFormRate("");
+      setFormNotes("");
+      setFormOfficial(true);
+      setFormOverride(false);
+      setShowForm(false);
+    } catch (err: any) {
+      console.error("Unexpected insert error:", err);
+      setFormError("Unexpected error while saving.");
+    } finally {
+      setSavingForm(false);
+    }
   }
 
   if (loadingUser) {
@@ -117,7 +247,6 @@ export default function CentralBankDashboardPage() {
   }
 
   if (!user) {
-    // We already redirected above, but this keeps TS and render happy.
     return null;
   }
 
@@ -169,7 +298,7 @@ export default function CentralBankDashboardPage() {
           {/* Left column */}
           <div className="space-y-6">
             {/* Manual overrides */}
-            <div className="rounded-2xl border border-zinc-800 bg-zinc-950/80 p-4 space-y-3">
+            <div className="rounded-2xl border border-zinc-800 bg-zinc-950/80 p-4 space-y-4">
               <div className="flex items-center justify-between gap-3">
                 <div>
                   <p className="text-[0.65rem] uppercase tracking-[0.2em] text-zinc-500">
@@ -182,14 +311,129 @@ export default function CentralBankDashboardPage() {
                 </div>
                 <button
                   type="button"
+                  onClick={() => setShowForm(true)}
                   className="rounded-full bg-emerald-500 px-3 py-1.5 text-[0.75rem] font-medium text-black hover:bg-emerald-400"
                 >
                   + Add manual fixing
                 </button>
               </div>
 
+              {/* Inline create form */}
+              {showForm && (
+                <form
+                  onSubmit={handleCreateManualFixing}
+                  className="rounded-xl border border-zinc-800 bg-black/70 p-3 space-y-3 text-xs"
+                >
+                  <div className="grid gap-3 sm:grid-cols-2">
+                    <div className="space-y-1">
+                      <label className="text-[0.7rem] text-zinc-400">
+                        Fixing date
+                      </label>
+                      <input
+                        type="date"
+                        value={formDate}
+                        onChange={(e) => setFormDate(e.target.value)}
+                        className="w-full rounded-lg border border-zinc-800 bg-black px-2 py-1.5 text-xs text-zinc-100 focus:border-emerald-500 focus:outline-none focus:ring-1 focus:ring-emerald-500/60"
+                      />
+                    </div>
+                    <div className="space-y-1">
+                      <label className="text-[0.7rem] text-zinc-400">
+                        Base / quote
+                      </label>
+                      <div className="flex gap-2">
+                        <input
+                          type="text"
+                          value={formBase}
+                          onChange={(e) => setFormBase(e.target.value.toUpperCase())}
+                          className="w-1/2 rounded-lg border border-zinc-800 bg-black px-2 py-1.5 text-xs text-zinc-100 focus:border-emerald-500 focus:outline-none focus:ring-1 focus:ring-emerald-500/60"
+                        />
+                        <input
+                          type="text"
+                          value={formQuote}
+                          onChange={(e) => setFormQuote(e.target.value.toUpperCase())}
+                          className="w-1/2 rounded-lg border border-zinc-800 bg-black px-2 py-1.5 text-xs text-zinc-100 focus:border-emerald-500 focus:outline-none focus:ring-1 focus:ring-emerald-500/60"
+                        />
+                      </div>
+                    </div>
+                  </div>
+
+                  <div className="space-y-1">
+                    <label className="text-[0.7rem] text-zinc-400">
+                      Mid rate
+                    </label>
+                    <input
+                      type="text"
+                      value={formRate}
+                      onChange={(e) => setFormRate(e.target.value)}
+                      placeholder="e.g. 4550.644"
+                      className="w-full rounded-lg border border-zinc-800 bg-black px-2 py-1.5 text-xs text-zinc-100 focus:border-emerald-500 focus:outline-none focus:ring-1 focus:ring-emerald-500/60"
+                    />
+                  </div>
+
+                  <div className="flex flex-wrap items-center gap-4 text-[0.7rem]">
+                    <label className="inline-flex items-center gap-1 text-zinc-300">
+                      <input
+                        type="checkbox"
+                        checked={formOfficial}
+                        onChange={(e) => setFormOfficial(e.target.checked)}
+                        className="h-3 w-3 rounded border-zinc-700 bg-black"
+                      />
+                      Official fixing
+                    </label>
+                    <label className="inline-flex items-center gap-1 text-zinc-300">
+                      <input
+                        type="checkbox"
+                        checked={formOverride}
+                        onChange={(e) => setFormOverride(e.target.checked)}
+                        className="h-3 w-3 rounded border-zinc-700 bg-black"
+                      />
+                      Manual override
+                    </label>
+                  </div>
+
+                  <div className="space-y-1">
+                    <label className="text-[0.7rem] text-zinc-400">
+                      Notes (optional)
+                    </label>
+                    <textarea
+                      value={formNotes}
+                      onChange={(e) => setFormNotes(e.target.value)}
+                      rows={2}
+                      className="w-full rounded-lg border border-zinc-800 bg-black px-2 py-1.5 text-xs text-zinc-100 focus:border-emerald-500 focus:outline-none focus:ring-1 focus:ring-emerald-500/60"
+                      placeholder="Reason for override, board approval ref, etc."
+                    />
+                  </div>
+
+                  {formError && (
+                    <p className="text-[0.7rem] text-red-400">{formError}</p>
+                  )}
+
+                  <div className="flex items-center justify-between gap-3">
+                    <button
+                      type="button"
+                      onClick={() => {
+                        if (!savingForm) {
+                          setShowForm(false);
+                          setFormError(null);
+                        }
+                      }}
+                      className="text-[0.7rem] text-zinc-400 hover:text-zinc-100"
+                    >
+                      Cancel
+                    </button>
+                    <button
+                      type="submit"
+                      disabled={savingForm}
+                      className="rounded-full bg-emerald-500 px-3 py-1.5 text-[0.75rem] font-medium text-black hover:bg-emerald-400 disabled:cursor-not-allowed disabled:opacity-70"
+                    >
+                      {savingForm ? "Saving…" : "Save fixing"}
+                    </button>
+                  </div>
+                </form>
+              )}
+
               <div className="rounded-xl border border-zinc-900 bg-black/60 overflow-hidden text-xs">
-                <div className="grid grid-cols-[1.1fr_0.7fr_0.7fr_0.7fr_0.7fr] bg-zinc-950/90 text-[0.7rem] text-zinc-400">
+                <div className="grid grid-cols-[1.1fr_0.7fr_0.7fr_0.7fr_0.9fr] bg-zinc-950/90 text-[0.7rem] text-zinc-400">
                   <div className="px-3 py-2">Date &amp; pair</div>
                   <div className="px-3 py-2 text-right">Mid rate</div>
                   <div className="px-3 py-2 text-right">Official</div>
@@ -200,7 +444,11 @@ export default function CentralBankDashboardPage() {
                 <div className="max-h-56 overflow-y-auto">
                   {loadingOverrides ? (
                     <div className="px-3 py-4 text-[0.75rem] text-zinc-500">
-                      Loading overrides…
+                      Loading manual fixings…
+                    </div>
+                  ) : overridesError ? (
+                    <div className="px-3 py-4 text-[0.75rem] text-red-400">
+                      {overridesError}
                     </div>
                   ) : overrides.length === 0 ? (
                     <div className="px-3 py-4 text-[0.75rem] text-zinc-500">
@@ -211,7 +459,7 @@ export default function CentralBankDashboardPage() {
                     overrides.map((row) => (
                       <div
                         key={row.id}
-                        className="grid grid-cols-[1.1fr_0.7fr_0.7fr_0.7fr_0.7fr] border-t border-zinc-900/80 px-3 py-2"
+                        className="grid grid-cols-[1.1fr_0.7fr_0.7fr_0.7fr_0.9fr] border-t border-zinc-900/80 px-3 py-2"
                       >
                         <div>
                           <p className="text-zinc-100">{row.as_of_date}</p>
@@ -221,7 +469,7 @@ export default function CentralBankDashboardPage() {
                         </div>
                         <div className="text-right text-zinc-100">
                           {row.rate_mid.toLocaleString("en-US", {
-                            maximumFractionDigits: 4,
+                            maximumFractionDigits: 6,
                           })}
                         </div>
                         <div className="text-right text-[0.7rem]">
@@ -243,23 +491,25 @@ export default function CentralBankDashboardPage() {
                           )}
                         </div>
                         <div className="text-right text-[0.7rem] text-zinc-500">
-                          {row.created_by ?? "—"}
+                          {row.created_email ?? "—"}
                         </div>
                       </div>
                     ))
                   )}
                 </div>
               </div>
+
               <p className="text-[0.7rem] text-zinc-500">
-                TODO: Wire this table to the real{" "}
+                Data in this table is stored in the Supabase{" "}
                 <code className="rounded bg-zinc-900 px-1 py-0.5">
-                  /api/admin/manual-rate
+                  manual_fixings
                 </code>{" "}
-                endpoints used by the FX engine.
+                table. Later we can let the FX engine read from this table to
+                override or annotate its own computed fixings.
               </p>
             </div>
 
-            {/* Export panel */}
+            {/* Export panel (still conceptual for now) */}
             <div className="rounded-2xl border border-zinc-800 bg-zinc-950/80 p-4 space-y-3">
               <div className="flex items-center justify-between gap-3">
                 <div>
@@ -277,9 +527,8 @@ export default function CentralBankDashboardPage() {
                 <button
                   type="button"
                   onClick={() => {
-                    // TODO: implement real exports
                     alert(
-                      "Export endpoints not wired yet. Once ready, this will download CSV for recent rates."
+                      "Next step: wire this to /api/v1/export/rates or a dedicated admin export endpoint."
                     );
                   }}
                   className="rounded-xl border border-zinc-700 bg-black px-3 py-2 text-zinc-100 hover:bg-zinc-900"
@@ -289,9 +538,7 @@ export default function CentralBankDashboardPage() {
                 <button
                   type="button"
                   onClick={() => {
-                    alert(
-                      "Export endpoints not wired yet. Once ready, this will download Excel for recent rates."
-                    );
+                    alert("Excel export will be added in the next phase.");
                   }}
                   className="rounded-xl border border-zinc-700 bg-black px-3 py-2 text-zinc-100 hover:bg-zinc-900"
                 >
@@ -301,7 +548,7 @@ export default function CentralBankDashboardPage() {
                   type="button"
                   onClick={() => {
                     alert(
-                      "Export endpoints not wired yet. Once ready, this will download overrides dataset."
+                      "Override export will pull from the manual_fixings table in a later phase."
                     );
                   }}
                   className="rounded-xl border border-zinc-700 bg-black px-3 py-2 text-zinc-100 hover:bg-zinc-900"
@@ -311,15 +558,16 @@ export default function CentralBankDashboardPage() {
               </div>
 
               <p className="text-[0.7rem] text-zinc-500">
-                Suggested endpoints (to be implemented):{" "}
+                Suggestion: reuse the existing{" "}
                 <code className="rounded bg-zinc-900 px-1 py-0.5">
-                  /api/admin/export/rates
+                  /api/v1/export/rates
                 </code>{" "}
-                and{" "}
+                endpoint for CSV and add a dedicated overrides export powered by
+                the{" "}
                 <code className="rounded bg-zinc-900 px-1 py-0.5">
-                  /api/admin/export/overrides
-                </code>
-                .
+                  manual_fixings
+                </code>{" "}
+                table.
               </p>
             </div>
           </div>
@@ -346,9 +594,12 @@ export default function CentralBankDashboardPage() {
               </div>
 
               <p className="text-[0.7rem] text-zinc-500">
-                TODO: Re-use the existing FX chart infrastructure to create
-                confidential views (e.g. 7-day volatility, override impact,
-                liquidity signals).
+                Next phase: pull long-horizon history from the engine and
+                overlay manual fixings from{" "}
+                <code className="rounded bg-zinc-900 px-1 py-0.5">
+                  manual_fixings
+                </code>{" "}
+                to show impact.
               </p>
             </div>
 
@@ -394,11 +645,12 @@ export default function CentralBankDashboardPage() {
               </div>
 
               <p className="text-[0.7rem] text-zinc-500">
-                TODO: Back this card with a small admin table exposed via{" "}
+                We&apos;ll back this card with a small Supabase table (e.g.
                 <code className="rounded bg-zinc-900 px-1 py-0.5">
-                  /api/admin/fixing-schedule
+                  fixing_schedule
                 </code>
-                .
+                ) and an editor UI so the bank can manage its calendar
+                centrally.
               </p>
             </div>
           </div>
