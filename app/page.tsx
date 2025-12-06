@@ -322,7 +322,17 @@ export default async function HomePage() {
   ]);
 
   const points = history?.points ?? [];
+  // buildInsightsFromSummary returns string[]
   const summaryInsights = summary ? buildInsightsFromSummary(summary) : null;
+  const primaryInsight =
+    summaryInsights && summaryInsights.length > 0
+      ? summaryInsights[0]
+      : null;
+  const hintText =
+    summaryInsights && summaryInsights.length > 1
+      ? summaryInsights[1]
+      : null;
+
   const commentary = buildDailyCommentary(summary);
 
   const { anchor, members } = buildEamuOverview(summary);
@@ -470,10 +480,10 @@ export default async function HomePage() {
                     Trend (experimental)
                   </p>
                   <p className="text-sm">
-                    {summaryInsights?.shortLabel ?? "Range-bound"}
+                    {primaryInsight ?? "Range-bound"}
                   </p>
                   <p className="text-[0.7rem] text-zinc-500">
-                    {summaryInsights?.hint ?? "Waiting for more history."}
+                    {hintText ?? "Waiting for more history."}
                   </p>
                 </div>
               </div>
