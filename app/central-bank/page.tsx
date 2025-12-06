@@ -168,7 +168,16 @@ function AdminAnalyticsPanel({
         }
 
         const json = await res.json();
-        const raw = (json?.data ?? json ?? []) as any[];
+
+        // Be defensive about the response shape:
+        //  - Prefer json.data if it's an array
+        //  - Else, if json itself is an array, use that
+        //  - Otherwise fall back to an empty array
+        let rawCandidate: any = json;
+        if (json && typeof json === "object" && Array.isArray((json as any).data)) {
+          rawCandidate = (json as any).data;
+        }
+        const raw: any[] = Array.isArray(rawCandidate) ? rawCandidate : [];
 
         const mapped: AdminHistoryPoint[] = raw
           .map((p) => {
@@ -1132,9 +1141,9 @@ export default function CentralBankDashboardPage() {
                     {schedule.created_email && (
                       <p className="text-[0.7rem] text-zinc-500">
                         Last updated by{" "}
-                          <span className="text-zinc-300">
-                            {schedule.created_email}
-                          </span>
+                        <span className="text-zinc-300">
+                          {schedule.created_email}
+                        </span>
                         .
                       </p>
                     )}
