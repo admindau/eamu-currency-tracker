@@ -23,6 +23,75 @@ type ManualOverrideRow = {
   created_at: string;
 };
 
+/**
+ * Utility: turn manual_fixings rows into CSV and trigger a download in the browser.
+ */
+function downloadManualFixingsCsv(
+  rows: ManualOverrideRow[],
+  filename: string
+) {
+  if (!rows.length) {
+    alert("No manual fixings available to export yet.");
+    return;
+  }
+
+  const headers = [
+    "as_of_date",
+    "base_currency",
+    "quote_currency",
+    "rate_mid",
+    "is_official",
+    "is_manual_override",
+    "notes",
+    "created_email",
+    "created_at",
+  ];
+
+  function toCsvValue(value: unknown): string {
+    if (value === null || value === undefined) return "";
+    const str = String(value);
+    if (/[",\n]/.test(str)) {
+      return `"${str.replace(/"/g, '""')}"`;
+    }
+    return str;
+  }
+
+  const lines: string[] = [];
+
+  // Header
+  lines.push(headers.join(","));
+
+  // Rows
+  for (const row of rows) {
+    const values = [
+      row.as_of_date,
+      row.base_currency,
+      row.quote_currency,
+      row.rate_mid,
+      row.is_official,
+      row.is_manual_override,
+      row.notes ?? "",
+      row.created_email ?? "",
+      row.created_at,
+    ].map(toCsvValue);
+    lines.push(values.join(","));
+  }
+
+  const csvContent = lines.join("\n");
+  const blob = new Blob([csvContent], {
+    type: "text/csv;charset=utf-8;",
+  });
+
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement("a");
+  link.href = url;
+  link.download = filename;
+  document.body.appendChild(link);
+  link.click();
+  document.body.removeChild(link);
+  URL.revokeObjectURL(url);
+}
+
 export default function CentralBankDashboardPage() {
   const router = useRouter();
   const supabase = getSupabaseBrowserClient();
@@ -344,13 +413,17 @@ export default function CentralBankDashboardPage() {
                         <input
                           type="text"
                           value={formBase}
-                          onChange={(e) => setFormBase(e.target.value.toUpperCase())}
+                          onChange={(e) =>
+                            setFormBase(e.target.value.toUpperCase())
+                          }
                           className="w-1/2 rounded-lg border border-zinc-800 bg-black px-2 py-1.5 text-xs text-zinc-100 focus:border-emerald-500 focus:outline-none focus:ring-1 focus:ring-emerald-500/60"
                         />
                         <input
                           type="text"
                           value={formQuote}
-                          onChange={(e) => setFormQuote(e.target.value.toUpperCase())}
+                          onChange={(e) =>
+                            setFormQuote(e.target.value.toUpperCase())
+                          }
                           className="w-1/2 rounded-lg border border-zinc-800 bg-black px-2 py-1.5 text-xs text-zinc-100 focus:border-emerald-500 focus:outline-none focus:ring-1 focus:ring-emerald-500/60"
                         />
                       </div>
@@ -509,7 +582,7 @@ export default function CentralBankDashboardPage() {
               </p>
             </div>
 
-            {/* Export panel (still conceptual for now) */}
+            {/* Export panel */}
             <div className="rounded-2xl border border-zinc-800 bg-zinc-950/80 p-4 space-y-3">
               <div className="flex items-center justify-between gap-3">
                 <div>
@@ -517,8 +590,8 @@ export default function CentralBankDashboardPage() {
                     Data export
                   </p>
                   <p className="text-sm text-zinc-400">
-                    Pull engine data into CSV/Excel for offline analysis and
-                    sharing.
+                    Export your manual fixings to CSV / Excel for reporting and
+                    backup.
                   </p>
                 </div>
               </div>
@@ -526,48 +599,37 @@ export default function CentralBankDashboardPage() {
               <div className="flex flex-wrap items-center gap-3 text-xs">
                 <button
                   type="button"
-                  onClick={() => {
-                    alert(
-                      "Next step: wire this to /api/v1/export/rates or a dedicated admin export endpoint."
-                    );
-                  }}
+                  onClick={() =>
+                    downloadManualFixingsCsv(
+                      overrides,
+                      "manual_fixings_overrides.csv"
+                    )
+                  }
                   className="rounded-xl border border-zinc-700 bg-black px-3 py-2 text-zinc-100 hover:bg-zinc-900"
                 >
-                  Export recent rates (CSV)
+                  Export overrides (CSV)
                 </button>
                 <button
                   type="button"
-                  onClick={() => {
-                    alert("Excel export will be added in the next phase.");
-                  }}
+                  onClick={() =>
+                    downloadManualFixingsCsv(
+                      overrides,
+                      "manual_fixings_overrides_excel.csv"
+                    )
+                  }
                   className="rounded-xl border border-zinc-700 bg-black px-3 py-2 text-zinc-100 hover:bg-zinc-900"
                 >
-                  Export recent rates (Excel)
-                </button>
-                <button
-                  type="button"
-                  onClick={() => {
-                    alert(
-                      "Override export will pull from the manual_fixings table in a later phase."
-                    );
-                  }}
-                  className="rounded-xl border border-zinc-700 bg-black px-3 py-2 text-zinc-100 hover:bg-zinc-900"
-                >
-                  Export overrides
+                  Export overrides (Excel)
                 </button>
               </div>
 
               <p className="text-[0.7rem] text-zinc-500">
-                Suggestion: reuse the existing{" "}
-                <code className="rounded bg-zinc-900 px-1 py-0.5">
-                  /api/v1/export/rates
-                </code>{" "}
-                endpoint for CSV and add a dedicated overrides export powered by
-                the{" "}
+                These exports currently include data from{" "}
                 <code className="rounded bg-zinc-900 px-1 py-0.5">
                   manual_fixings
                 </code>{" "}
-                table.
+                only. In a later phase, we can also hook this panel into the
+                main FX engine export endpoints for full market history.
               </p>
             </div>
           </div>
