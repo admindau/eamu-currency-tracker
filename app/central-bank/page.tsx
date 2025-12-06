@@ -156,7 +156,7 @@ function AdminAnalyticsPanel({
 
       try {
         const days =
-          range === "90d" ? 90 : range === "365d" ? 365 : 3650; // "all" ≈ long window
+          range === "90d" ? 90 : range === "365d" ? 365 : 3650; // "all" ≈ very long window
 
         const res = await fetch(
           `/api/v1/rates/history?base=SSP&quote=USD&days=${days}`
@@ -167,16 +167,41 @@ function AdminAnalyticsPanel({
           throw new Error(`HTTP ${res.status}`);
         }
 
-        const json = await res.json();
+        const json: any = await res.json();
 
-        // Be defensive about the response shape:
-        //  - Prefer json.data if it's an array
-        //  - Else, if json itself is an array, use that
-        //  - Otherwise fall back to an empty array
-        let rawCandidate: any = json;
-        if (json && typeof json === "object" && Array.isArray((json as any).data)) {
-          rawCandidate = (json as any).data;
+        /**
+         * SUPER-flexible parsing:
+         * - Prefer known keys (data, history, results, points, items)
+         * - Otherwise, use the first array property we find
+         */
+        let rawCandidate: any = [];
+
+        if (Array.isArray(json)) {
+          rawCandidate = json;
+        } else if (json && typeof json === "object") {
+          const preferred =
+            json.data ??
+            json.history ??
+            json.results ??
+            json.points ??
+            json.items;
+
+          if (Array.isArray(preferred)) {
+            rawCandidate = preferred;
+          } else {
+            const firstArrayProp = Object.values(json).find((v) =>
+              Array.isArray(v)
+            );
+            if (Array.isArray(firstArrayProp)) {
+              rawCandidate = firstArrayProp;
+            } else {
+              rawCandidate = [];
+            }
+          }
+        } else {
+          rawCandidate = [];
         }
+
         const raw: any[] = Array.isArray(rawCandidate) ? rawCandidate : [];
 
         const mapped: AdminHistoryPoint[] = raw
@@ -186,9 +211,10 @@ function AdminAnalyticsPanel({
               p.date ??
               p.as_of ??
               p.fixing_date ??
+              p.fx_date ??
               "";
             const mid = Number(
-              p.rate_mid ?? p.mid ?? p.value ?? p.close ?? 0
+              p.rate_mid ?? p.mid ?? p.value ?? p.close ?? p.price ?? 0
             );
             if (!date || !Number.isFinite(mid)) return null;
             return { date, mid };
@@ -351,10 +377,10 @@ function AdminAnalyticsPanel({
 
       <p className="text-[0.7rem] text-zinc-500">
         In this window, the system has{" "}
-        <span className="text-zinc-200 font-medium">
-          {overridesInRange.length}
-        </span>{" "}
-        manual USD/SSP overrides captured in{" "}
+          <span className="text-zinc-200 font-medium">
+            {overridesInRange.length}
+          </span>{" "}
+          manual USD/SSP overrides captured in{" "}
         <code className="rounded bg-zinc-900 px-1 py-0.5">
           manual_fixings
         </code>
