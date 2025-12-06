@@ -115,8 +115,6 @@ function buildEamuOverview(summary: SummaryMarketResponse | null): {
   anchor: CurrencyOverview;
   members: CurrencyOverview[];
 } {
-  const base = "SSP";
-
   const dummy: CurrencyOverview = {
     code: "USD",
     name: "United States Dollar",
@@ -300,20 +298,9 @@ function buildDailyCommentary(summary: SummaryMarketResponse | null): string {
   const trend = summary.trend;
   let sentence2 = "";
 
-  if (trend && Number.isFinite(trend.score)) {
-    if (trend.score >= 0.7) {
-      sentence2 =
-        " Over the past 30 days, the pair has traded with a strong directional bias, as captured by the current trend signal.";
-    } else if (trend.score >= 0.35) {
-      sentence2 =
-        " Over the past month, the trend signal points to a modest but persistent directional bias, with some mean reversion along the way.";
-    } else if (trend.score >= 0.05) {
-      sentence2 =
-        " Recent price action has been mixed, with the trend signal pointing to a largely range-bound market.";
-    } else {
-      sentence2 =
-        " Price action over the last month has been largely range-bound, with limited directional conviction in either direction.";
-    }
+  if (trend?.label) {
+    const label = trend.label;
+    sentence2 = ` The current trend signal is “${label}”, summarising recent price action over the configured window.`;
   }
 
   return (
@@ -520,9 +507,6 @@ export default async function HomePage() {
                   365-day anchor pair trajectory
                 </p>
               </div>
-              <code className="rounded-full bg-zinc-950 px-2.5 py-1 text-[0.65rem] text-zinc-500 border border-zinc-800">
-                /api/v1/rates/history
-              </code>
             </div>
 
             <div className="mt-3">
@@ -574,9 +558,6 @@ export default async function HomePage() {
                   </p>
                   <p className="text-sm font-medium">USD/SSP daily note</p>
                 </div>
-                <code className="rounded-full bg-zinc-950 px-2.5 py-1 text-[0.65rem] text-zinc-500 border border-zinc-800">
-                  /api/v1/summary/market
-                </code>
               </div>
               <p className="text-[0.8rem] leading-relaxed text-zinc-300">
                 {commentary}
