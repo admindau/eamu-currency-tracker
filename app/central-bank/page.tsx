@@ -23,6 +23,14 @@ type ManualOverrideRow = {
   created_at: string;
 };
 
+type FixingScheduleRow = {
+  id: string;
+  next_fixing_date: string;
+  window_label: string | null;
+  notes: string | null;
+  created_email: string | null;
+};
+
 /**
  * Utility: turn manual_fixings rows into CSV and trigger a download in the browser.
  */
@@ -50,7 +58,7 @@ function downloadManualFixingsCsv(
   function toCsvValue(value: unknown): string {
     if (value === null || value === undefined) return "";
     const str = String(value);
-    if (/[",\n]/.test(str)) {
+    if (/[\", \n]/.test(str)) {
       return `"${str.replace(/"/g, '""')}"`;
     }
     return str;
@@ -92,6 +100,17 @@ function downloadManualFixingsCsv(
   URL.revokeObjectURL(url);
 }
 
+/**
+ * Format date like: 2025-12-07 (Monday)
+ */
+function formatDateWithWeekday(dateStr: string): string {
+  if (!dateStr) return "";
+  const d = new Date(dateStr + "T00:00:00Z");
+  if (Number.isNaN(d.getTime())) return dateStr;
+  const weekday = d.toLocaleDateString("en-US", { weekday: "long" });
+  return `${dateStr} (${weekday})`;
+}
+
 export default function CentralBankDashboardPage() {
   const router = useRouter();
   const supabase = getSupabaseBrowserClient();
@@ -107,8 +126,20 @@ export default function CentralBankDashboardPage() {
   const [savingForm, setSavingForm] = useState(false);
   const [formError, setFormError] = useState<string | null>(null);
 
-  const today = new Date().toISOString().slice(0, 10);
+  // Fixing schedule state
+  const [schedule, setSchedule] = useState<FixingScheduleRow | null>(null);
+  const [loadingSchedule, setLoadingSchedule] = useState(true);
+  const [scheduleError, setScheduleError] = useState<string | null>(null);
+  const [editingSchedule, setEditingSchedule] = useState(false);
+  const [savingSchedule, setSavingSchedule] = useState(false);
 
+  // Fixing schedule form fields
+  const today = new Date().toISOString().slice(0, 10);
+  const [scheduleDate, setScheduleDate] = useState(today);
+  const [scheduleWindow, setScheduleWindow] = useState("Normal fixing window");
+  const [scheduleNotes, setScheduleNotes] = useState("");
+
+  // Manual fixing form fields
   const [formDate, setFormDate] = useState(today);
   const [formBase, setFormBase] = useState("SSP");
   const [formQuote, setFormQuote] = useState("USD");
@@ -217,6 +248,75 @@ export default function CentralBankDashboardPage() {
     };
   }, [supabase, user]);
 
+  // 3) Load fixing schedule once user is available
+  useEffect(() => {
+    if (!user) return;
+
+    let active = true;
+
+    async function loadSchedule() {
+      setLoadingSchedule(true);
+      setScheduleError(null);
+
+      try {
+        const { data, error } = await supabase
+          .from("fixing_schedule")
+          .select(
+            `
+            id,
+            next_fixing_date,
+            window_label,
+            notes,
+            created_email,
+            created_at
+          `
+          )
+          .order("next_fixing_date", { ascending: true })
+          .limit(1);
+
+        if (!active) return;
+
+        if (error) {
+          console.error("Failed to load fixing_schedule:", error);
+          setSchedule(null);
+          setScheduleError(
+            error.message ??
+              "Could not load fixing schedule. Check that the table exists."
+          );
+        } else if (data && data.length > 0) {
+          const row = data[0];
+          const normalised: FixingScheduleRow = {
+            id: row.id,
+            next_fixing_date: row.next_fixing_date,
+            window_label: row.window_label ?? null,
+            notes: row.notes ?? null,
+            created_email: row.created_email ?? null,
+          };
+          setSchedule(normalised);
+          setScheduleDate(row.next_fixing_date);
+          setScheduleWindow(row.window_label ?? "Normal fixing window");
+          setScheduleNotes(row.notes ?? "");
+        } else {
+          // No schedule yet; keep null and default form values
+          setSchedule(null);
+        }
+      } catch (err: any) {
+        if (!active) return;
+        console.error("Unexpected loadSchedule error:", err);
+        setSchedule(null);
+        setScheduleError("Unexpected error loading schedule.");
+      } finally {
+        if (active) setLoadingSchedule(false);
+      }
+    }
+
+    loadSchedule();
+
+    return () => {
+      active = false;
+    };
+  }, [supabase, user]);
+
   async function handleSignOut() {
     await supabase.auth.signOut();
     router.replace("/central-bank/login");
@@ -302,6 +402,90 @@ export default function CentralBankDashboardPage() {
       setFormError("Unexpected error while saving.");
     } finally {
       setSavingForm(false);
+    }
+  }
+
+  async function handleSaveSchedule(e: FormEvent) {
+    e.preventDefault();
+    if (!user) return;
+
+    if (!scheduleDate) {
+      setScheduleError("Please select a fixing date.");
+      return;
+    }
+
+    setSavingSchedule(true);
+    setScheduleError(null);
+
+    try {
+      const payload = {
+        next_fixing_date: scheduleDate,
+        window_label: scheduleWindow || null,
+        notes: scheduleNotes || null,
+        created_by: schedule ? undefined : user.id,
+        created_email: schedule ? undefined : user.email ?? null,
+      };
+
+      let result;
+      if (schedule) {
+        // Update existing row
+        result = await supabase
+          .from("fixing_schedule")
+          .update(payload)
+          .eq("id", schedule.id)
+          .select(
+            `
+            id,
+            next_fixing_date,
+            window_label,
+            notes,
+            created_email,
+            created_at
+          `
+          )
+          .single();
+      } else {
+        // Insert new schedule
+        result = await supabase
+          .from("fixing_schedule")
+          .insert([payload])
+          .select(
+            `
+            id,
+            next_fixing_date,
+            window_label,
+            notes,
+            created_email,
+            created_at
+          `
+          )
+          .single();
+      }
+
+      const { data, error } = result;
+
+      if (error) {
+        console.error("Failed to save fixing_schedule:", error);
+        setScheduleError(error.message ?? "Failed to save schedule.");
+        setSavingSchedule(false);
+        return;
+      }
+
+      const row: FixingScheduleRow = {
+        id: data.id,
+        next_fixing_date: data.next_fixing_date,
+        window_label: data.window_label ?? null,
+        notes: data.notes ?? null,
+        created_email: data.created_email ?? null,
+      };
+
+      setSchedule(row);
+      setEditingSchedule(false);
+    } catch (err: any) {
+      console.error("Unexpected save schedule error:", err);
+      setScheduleError("Unexpected error while saving schedule.");
+    } finally {
+      setSavingSchedule(false);
     }
   }
 
@@ -679,40 +863,148 @@ export default function CentralBankDashboardPage() {
                 </div>
                 <button
                   type="button"
+                  onClick={() => {
+                    setEditingSchedule((prev) => !prev);
+                    setScheduleError(null);
+                    if (schedule) {
+                      setScheduleDate(schedule.next_fixing_date);
+                      setScheduleWindow(
+                        schedule.window_label ?? "Normal fixing window"
+                      );
+                      setScheduleNotes(schedule.notes ?? "");
+                    }
+                  }}
                   className="rounded-full border border-zinc-700 bg-black px-3 py-1.5 text-[0.75rem] text-zinc-100 hover:bg-zinc-900"
                 >
-                  Edit schedule
+                  {editingSchedule ? "Close editor" : "Edit schedule"}
                 </button>
               </div>
 
-              <div className="rounded-xl border border-zinc-900 bg-black/60 p-3 text-xs space-y-2">
-                <div className="flex items-center justify-between">
-                  <span className="text-zinc-400">Next fixing date</span>
-                  <span className="rounded-full bg-emerald-500/10 px-2 py-0.5 text-[0.75rem] text-emerald-400">
-                    Placeholder: configure from admin API
-                  </span>
-                </div>
-                <div className="grid grid-cols-2 gap-2 text-[0.8rem]">
-                  <div>
-                    <p className="text-zinc-500">Example</p>
-                    <p className="text-zinc-100">2025-12-07 (Monday)</p>
-                  </div>
-                  <div>
-                    <p className="text-zinc-500">Notes</p>
-                    <p className="text-zinc-100">
-                      Normal fixing window. No holidays expected.
-                    </p>
-                  </div>
-                </div>
+              <div className="rounded-xl border border-zinc-900 bg-black/60 p-3 text-xs space-y-3">
+                {loadingSchedule ? (
+                  <p className="text-[0.75rem] text-zinc-500">
+                    Loading schedule…
+                  </p>
+                ) : scheduleError ? (
+                  <p className="text-[0.75rem] text-red-400">
+                    {scheduleError}
+                  </p>
+                ) : schedule ? (
+                  <>
+                    <div className="flex items-center justify-between">
+                      <span className="text-zinc-400">Next fixing date</span>
+                      <span className="rounded-full bg-emerald-500/10 px-2 py-0.5 text-[0.75rem] text-emerald-400">
+                        {schedule.window_label ?? "Normal fixing window"}
+                      </span>
+                    </div>
+                    <div className="grid grid-cols-2 gap-2 text-[0.8rem]">
+                      <div>
+                        <p className="text-zinc-500">Configured</p>
+                        <p className="text-zinc-100">
+                          {formatDateWithWeekday(schedule.next_fixing_date)}
+                        </p>
+                      </div>
+                      <div>
+                        <p className="text-zinc-500">Notes</p>
+                        <p className="text-zinc-100">
+                          {schedule.notes ?? "No special instructions."}
+                        </p>
+                      </div>
+                    </div>
+                    {schedule.created_email && (
+                      <p className="text-[0.7rem] text-zinc-500">
+                        Last updated by{" "}
+                        <span className="text-zinc-300">
+                          {schedule.created_email}
+                        </span>
+                        .
+                      </p>
+                    )}
+                  </>
+                ) : (
+                  <p className="text-[0.75rem] text-zinc-500">
+                    No schedule configured yet. Use &quot;Edit schedule&quot; to
+                    set the next fixing date.
+                  </p>
+                )}
+
+                {editingSchedule && (
+                  <form
+                    onSubmit={handleSaveSchedule}
+                    className="mt-2 space-y-2 border-t border-zinc-900 pt-3"
+                  >
+                    <div className="space-y-1">
+                      <label className="text-[0.7rem] text-zinc-400">
+                        Next fixing date
+                      </label>
+                      <input
+                        type="date"
+                        value={scheduleDate}
+                        onChange={(e) => setScheduleDate(e.target.value)}
+                        className="w-full rounded-lg border border-zinc-800 bg-black px-2 py-1.5 text-xs text-zinc-100 focus:border-emerald-500 focus:outline-none focus:ring-1 focus:ring-emerald-500/60"
+                      />
+                    </div>
+                    <div className="space-y-1">
+                      <label className="text-[0.7rem] text-zinc-400">
+                        Window label
+                      </label>
+                      <input
+                        type="text"
+                        value={scheduleWindow}
+                        onChange={(e) => setScheduleWindow(e.target.value)}
+                        placeholder="Normal fixing window"
+                        className="w-full rounded-lg border border-zinc-800 bg-black px-2 py-1.5 text-xs text-zinc-100 focus:border-emerald-500 focus:outline-none focus:ring-1 focus:ring-emerald-500/60"
+                      />
+                    </div>
+                    <div className="space-y-1">
+                      <label className="text-[0.7rem] text-zinc-400">
+                        Notes (optional)
+                      </label>
+                      <textarea
+                        value={scheduleNotes}
+                        onChange={(e) => setScheduleNotes(e.target.value)}
+                        rows={2}
+                        className="w-full rounded-lg border border-zinc-800 bg-black px-2 py-1.5 text-xs text-zinc-100 focus:border-emerald-500 focus:outline-none focus:ring-1 focus:ring-emerald-500/60"
+                        placeholder="e.g. Holiday adjustments, board instructions, etc."
+                      />
+                    </div>
+
+                    {scheduleError && (
+                      <p className="text-[0.7rem] text-red-400">
+                        {scheduleError}
+                      </p>
+                    )}
+
+                    <div className="flex items-center justify-end gap-2">
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setEditingSchedule(false);
+                          setScheduleError(null);
+                        }}
+                        className="text-[0.7rem] text-zinc-400 hover:text-zinc-100"
+                      >
+                        Cancel
+                      </button>
+                      <button
+                        type="submit"
+                        disabled={savingSchedule}
+                        className="rounded-full bg-emerald-500 px-3 py-1.5 text-[0.75rem] font-medium text-black hover:bg-emerald-400 disabled:cursor-not-allowed disabled:opacity-70"
+                      >
+                        {savingSchedule ? "Saving…" : "Save schedule"}
+                      </button>
+                    </div>
+                  </form>
+                )}
               </div>
 
               <p className="text-[0.7rem] text-zinc-500">
-                We&apos;ll back this card with a small Supabase table (e.g.
+                This card is backed by the{" "}
                 <code className="rounded bg-zinc-900 px-1 py-0.5">
                   fixing_schedule
-                </code>
-                ) and an editor UI so the bank can manage its calendar
-                centrally.
+                </code>{" "}
+                table in Supabase. Use it to keep the official fixing calendar
+                in sync with market communications.
               </p>
             </div>
           </div>
