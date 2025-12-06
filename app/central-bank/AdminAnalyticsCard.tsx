@@ -163,9 +163,21 @@ export function AdminAnalyticsCard() {
   }, [mode]);
 
   const chartData = useMemo(() => {
+    // labels & engine series
     const labels = history.map((p) => p.date);
     const engineData = history.map((p) => p.mid);
-    const markerData = markers.map((m) => ({ x: m.date, y: m.mid }));
+
+    // build a lookup of overrides keyed by date
+    const markerMap = new Map<string, number>();
+    for (const m of markers) {
+      markerMap.set(m.date, m.mid);
+    }
+
+    // override markers aligned to labels (number | null[])
+    const markerData = labels.map((date) => {
+      const v = markerMap.get(date);
+      return v !== undefined ? v : null;
+    });
 
     return {
       labels,
@@ -191,58 +203,60 @@ export function AdminAnalyticsCard() {
           pointHoverRadius: 6,
         },
       ],
-    };
+    } as any; // <-- relax TS about dataset data types
   }, [history, markers]);
 
   const options = useMemo(
-    () => ({
-      responsive: true,
-      maintainAspectRatio: false,
-      interaction: {
-        mode: 'index' as const,
-        intersect: false,
-      },
-      scales: {
-        x: {
-          type: 'time' as const,
-          time: {
-            unit: mode === '90d' ? 'day' : 'month',
-          },
-          ticks: {
-            color: '#a1a1aa',
-          },
-          grid: {
-            color: 'rgba(39,39,42,0.4)',
-          },
+    () =>
+      ({
+        responsive: true,
+        maintainAspectRatio: false,
+        interaction: {
+          mode: 'index' as const,
+          intersect: false,
         },
-        y: {
-          ticks: {
-            color: '#a1a1aa',
+        scales: {
+          x: {
+            type: 'time' as const,
+            time: {
+              unit: mode === '90d' ? 'day' : 'month',
+            },
+            ticks: {
+              color: '#a1a1aa',
+            },
+            grid: {
+              color: 'rgba(39,39,42,0.4)',
+            },
           },
-          grid: {
-            color: 'rgba(39,39,42,0.4)',
-          },
-        },
-      },
-      plugins: {
-        legend: {
-          labels: {
-            color: '#e5e5e5',
-          },
-        },
-        tooltip: {
-          callbacks: {
-            label: (ctx: any) => {
-              const value = ctx.parsed.y?.toLocaleString?.() ?? ctx.parsed.y;
-              if (ctx.dataset.label === 'Manual overrides') {
-                return `Manual fixing: ${value}`;
-              }
-              return `Engine mid: ${value}`;
+          y: {
+            ticks: {
+              color: '#a1a1aa',
+            },
+            grid: {
+              color: 'rgba(39,39,42,0.4)',
             },
           },
         },
-      },
-    }),
+        plugins: {
+          legend: {
+            labels: {
+              color: '#e5e5e5',
+            },
+          },
+          tooltip: {
+            callbacks: {
+              label: (ctx: any) => {
+                const value =
+                  ctx.parsed.y?.toLocaleString?.() ?? ctx.parsed.y;
+                if (ctx.dataset.label === 'Manual overrides') {
+                  return `Manual fixing: ${value}`;
+                }
+                return `Engine mid: ${value}`;
+              },
+            },
+          },
+        },
+      }) as any,
     [mode],
   );
 
