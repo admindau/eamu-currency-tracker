@@ -56,9 +56,6 @@ type AdminHistoryPoint = {
   mid: number;
 };
 
-/**
- * Utility: turn manual_fixings rows into CSV and trigger a download in the browser.
- */
 function downloadManualFixingsCsv(
   rows: ManualOverrideRow[],
   filename: string
@@ -80,14 +77,14 @@ function downloadManualFixingsCsv(
     "created_at",
   ];
 
-  function toCsvValue(value: unknown): string {
+  const toCsvValue = (value: unknown): string => {
     if (value === null || value === undefined) return "";
     const str = String(value);
-    if (/[\", \n]/.test(str)) {
+    if (/[\",\n]/.test(str)) {
       return `"${str.replace(/"/g, '""')}"`;
     }
     return str;
-  }
+  };
 
   const lines: string[] = [];
   lines.push(headers.join(","));
@@ -122,9 +119,6 @@ function downloadManualFixingsCsv(
   URL.revokeObjectURL(url);
 }
 
-/**
- * Format date like: 2025-12-07 (Monday)
- */
 function formatDateWithWeekday(dateStr: string): string {
   if (!dateStr) return "";
   const d = new Date(dateStr + "T00:00:00Z");
@@ -133,15 +127,7 @@ function formatDateWithWeekday(dateStr: string): string {
   return `${dateStr} (${weekday})`;
 }
 
-/**
- * Admin analytics panel: pulls USD/SSP history and shows it with range selector.
- * History source: /api/v1/rates/history?base=SSP&quote=USD&days=...
- */
-function AdminAnalyticsPanel({
-  overrides,
-}: {
-  overrides: ManualOverrideRow[];
-}) {
+function AdminAnalyticsPanel({ overrides }: { overrides: ManualOverrideRow[] }) {
   const [range, setRange] = useState<"90d" | "365d" | "all">("365d");
   const [history, setHistory] = useState<AdminHistoryPoint[]>([]);
   const [loading, setLoading] = useState(false);
@@ -156,24 +142,17 @@ function AdminAnalyticsPanel({
 
       try {
         const days =
-          range === "90d" ? 90 : range === "365d" ? 365 : 3650; // "all" ≈ very long window
+          range === "90d" ? 90 : range === "365d" ? 365 : 3650;
 
         const res = await fetch(
           `/api/v1/rates/history?base=SSP&quote=USD&days=${days}`
         );
         if (!active) return;
 
-        if (!res.ok) {
-          throw new Error(`HTTP ${res.status}`);
-        }
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
 
         const json: any = await res.json();
 
-        /**
-         * SUPER-flexible parsing:
-         * - Prefer known keys (data, history, results, points, items)
-         * - Otherwise, use the first array property we find
-         */
         let rawCandidate: any = [];
 
         if (Array.isArray(json)) {
@@ -192,14 +171,10 @@ function AdminAnalyticsPanel({
             const firstArrayProp = Object.values(json).find((v) =>
               Array.isArray(v)
             );
-            if (Array.isArray(firstArrayProp)) {
-              rawCandidate = firstArrayProp;
-            } else {
-              rawCandidate = [];
-            }
+            rawCandidate = Array.isArray(firstArrayProp)
+              ? firstArrayProp
+              : [];
           }
-        } else {
-          rawCandidate = [];
         }
 
         const raw: any[] = Array.isArray(rawCandidate) ? rawCandidate : [];
@@ -253,7 +228,6 @@ function AdminAnalyticsPanel({
     );
   });
 
-  // Build a lookup of overrides keyed by fixing date
   const overrideLookup = new Map<string, ManualOverrideRow[]>();
   for (const o of overridesInRange) {
     const bucket = overrideLookup.get(o.as_of_date) ?? [];
@@ -261,7 +235,8 @@ function AdminAnalyticsPanel({
     overrideLookup.set(o.as_of_date, bucket);
   }
 
-  // Core engine history dataset
+  const labels = history.map((p) => p.date);
+
   const engineSeries = {
     label: "USD/SSP mid",
     data: history.map((p) => p.mid),
@@ -272,16 +247,14 @@ function AdminAnalyticsPanel({
     tension: 0.15,
   };
 
-  // Override markers – amber points on days where manual overrides exist
   const overrideSeries = {
     label: "Manual overrides",
     data: history.map((p) => {
       const rows = overrideLookup.get(p.date);
       if (!rows || !rows.length) return null;
-      // Use the first override's rate_mid for the marker height
       return rows[0].rate_mid;
     }),
-    borderColor: "rgba(251,191,36,1)", // amber-400
+    borderColor: "rgba(251,191,36,1)",
     backgroundColor: "rgba(251,191,36,1)",
     borderWidth: 0,
     pointRadius: 4,
@@ -289,18 +262,17 @@ function AdminAnalyticsPanel({
     showLine: false,
   };
 
-  const data: any = {
-    labels: history.map((p) => p.date),
-    datasets: [engineSeries as any, overrideSeries as any],
+  // Cast to any so TS stops complaining about dataset unions
+  const chartData: any = {
+    labels,
+    datasets: [engineSeries, overrideSeries],
   };
 
-  const options: any = {
+  const chartOptions: any = {
     responsive: true,
     maintainAspectRatio: false,
     plugins: {
-      legend: {
-        display: false,
-      },
+      legend: { display: false },
       tooltip: {
         intersect: false,
         mode: "index",
@@ -333,7 +305,6 @@ function AdminAnalyticsPanel({
               })} vs engine mid)`;
             }
 
-            // Engine line
             return `USD/SSP mid: ${v.toLocaleString("en-US", {
               maximumFractionDigits: 3,
             })}`;
@@ -423,7 +394,7 @@ function AdminAnalyticsPanel({
             No history data returned yet.
           </div>
         ) : (
-          <Line data={data} options={options} />
+          <Line data={chartData} options={chartOptions} />
         )}
       </div>
 
@@ -456,14 +427,12 @@ export default function CentralBankDashboardPage() {
   const [savingForm, setSavingForm] = useState(false);
   const [formError, setFormError] = useState<string | null>(null);
 
-  // Fixing schedule state
   const [schedule, setSchedule] = useState<FixingScheduleRow | null>(null);
   const [loadingSchedule, setLoadingSchedule] = useState(true);
   const [scheduleError, setScheduleError] = useState<string | null>(null);
   const [editingSchedule, setEditingSchedule] = useState(false);
   const [savingSchedule, setSavingSchedule] = useState(false);
 
-  // Fixing schedule form fields
   const today = new Date().toISOString().slice(0, 10);
   const [scheduleDate, setScheduleDate] = useState(today);
   const [scheduleWindow, setScheduleWindow] = useState(
@@ -471,7 +440,6 @@ export default function CentralBankDashboardPage() {
   );
   const [scheduleNotes, setScheduleNotes] = useState("");
 
-  // Manual fixing form fields
   const [formDate, setFormDate] = useState(today);
   const [formBase, setFormBase] = useState("SSP");
   const [formQuote, setFormQuote] = useState("USD");
@@ -480,7 +448,6 @@ export default function CentralBankDashboardPage() {
   const [formOverride, setFormOverride] = useState(false);
   const [formNotes, setFormNotes] = useState("");
 
-  // 1) Load authenticated user
   useEffect(() => {
     let isMounted = true;
 
@@ -509,7 +476,6 @@ export default function CentralBankDashboardPage() {
     };
   }, [router, supabase]);
 
-  // 2) Load manual fixings from Supabase (once user is available)
   useEffect(() => {
     if (!user) return;
 
@@ -582,7 +548,6 @@ export default function CentralBankDashboardPage() {
     };
   }, [supabase, user]);
 
-  // 3) Load fixing schedule once user is available
   useEffect(() => {
     if (!user) return;
 
@@ -828,14 +793,11 @@ export default function CentralBankDashboardPage() {
     );
   }
 
-  if (!user) {
-    return null;
-  }
+  if (!user) return null;
 
   return (
     <main className="min-h-screen bg-black text-zinc-100">
       <div className="mx-auto flex max-w-6xl flex-col gap-8 px-4 pb-16 pt-8">
-        {/* Top bar */}
         <header className="flex items-center justify-between gap-4">
           <div className="space-y-1">
             <p className="text-[0.65rem] uppercase tracking-[0.25em] text-zinc-500">
@@ -875,11 +837,8 @@ export default function CentralBankDashboardPage() {
 
         <div className="h-1 w-full rounded-full bg-gradient-to-r from-emerald-500 via-amber-400 to-red-500" />
 
-        {/* Layout grid */}
         <section className="grid gap-6 lg:grid-cols-[minmax(0,1.5fr)_minmax(0,1.1fr)]">
-          {/* Left column */}
           <div className="space-y-6">
-            {/* Manual overrides */}
             <div className="rounded-2xl border border-zinc-800 bg-zinc-950/80 p-4 space-y-4">
               <div className="flex items-center justify-between gap-3">
                 <div>
@@ -900,7 +859,6 @@ export default function CentralBankDashboardPage() {
                 </button>
               </div>
 
-              {/* Inline create form */}
               {showForm && (
                 <form
                   onSubmit={handleCreateManualFixing}
@@ -1095,7 +1053,6 @@ export default function CentralBankDashboardPage() {
               </p>
             </div>
 
-            {/* Export panel */}
             <div className="rounded-2xl border border-zinc-800 bg-zinc-950/80 p-4 space-y-3">
               <div className="flex items-center justify-between gap-3">
                 <div>
@@ -1147,12 +1104,9 @@ export default function CentralBankDashboardPage() {
             </div>
           </div>
 
-          {/* Right column */}
           <div className="space-y-6">
-            {/* Admin analytics chart */}
             <AdminAnalyticsPanel overrides={overrides} />
 
-            {/* Fixing schedule */}
             <div className="rounded-2xl border border-zinc-800 bg-zinc-950/80 p-4 space-y-3">
               <div className="flex items-center justify-between gap-3">
                 <div>
