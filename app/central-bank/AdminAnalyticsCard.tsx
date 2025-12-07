@@ -162,10 +162,44 @@ export function AdminAnalyticsCard() {
     };
   }, [mode]);
 
+  // Small helper to compute rolling std over a window
+  function computeVolBands(values: number[], windowSize: number) {
+    const upper: (number | null)[] = [];
+    const lower: (number | null)[] = [];
+
+    for (let i = 0; i < values.length; i++) {
+      if (i + 1 < windowSize) {
+        upper.push(null);
+        lower.push(null);
+        continue;
+      }
+
+      const start = i + 1 - windowSize;
+      const slice = values.slice(start, i + 1);
+      const mean = slice.reduce((s, v) => s + v, 0) / slice.length;
+      const variance =
+        slice.reduce((s, v) => s + (v - mean) * (v - mean), 0) /
+        slice.length;
+      const sigma = Math.sqrt(variance);
+
+      upper.push(mean + sigma);
+      lower.push(mean - sigma);
+    }
+
+    return { upper, lower };
+  }
+
   const chartData = useMemo(() => {
     // labels & engine series
     const labels = history.map((p) => p.date);
     const engineData = history.map((p) => p.mid);
+
+    // Volatility bands: 30-day rolling window
+    const windowSize = 30;
+    const { upper: volUpper, lower: volLower } = computeVolBands(
+      engineData,
+      windowSize,
+    );
 
     // build a lookup of overrides keyed by date
     const markerMap = new Map<string, number>();
@@ -193,6 +227,26 @@ export function AdminAnalyticsCard() {
           pointHitRadius: 4,
         },
         {
+          label: 'Volatility band (upper)',
+          data: volUpper,
+          borderColor: 'rgba(161,161,170,0.8)',
+          backgroundColor: 'rgba(161,161,170,0.2)',
+          borderWidth: 1,
+          tension: 0.25,
+          pointRadius: 0,
+          borderDash: [6, 4],
+        },
+        {
+          label: 'Volatility band (lower)',
+          data: volLower,
+          borderColor: 'rgba(161,161,170,0.8)',
+          backgroundColor: 'rgba(161,161,170,0.2)',
+          borderWidth: 1,
+          tension: 0.25,
+          pointRadius: 0,
+          borderDash: [6, 4],
+        },
+        {
           // Overrides rendered as green dots on the line
           label: 'Manual overrides',
           data: markerData,
@@ -203,7 +257,7 @@ export function AdminAnalyticsCard() {
           pointHoverRadius: 6,
         },
       ],
-    } as any; // <-- relax TS about dataset data types
+    } as any; // relax TS about mixed series
   }, [history, markers]);
 
   const options = useMemo(
@@ -248,10 +302,19 @@ export function AdminAnalyticsCard() {
               label: (ctx: any) => {
                 const value =
                   ctx.parsed.y?.toLocaleString?.() ?? ctx.parsed.y;
-                if (ctx.dataset.label === 'Manual overrides') {
-                  return `Manual fixing: ${value}`;
+
+                switch (ctx.dataset.label) {
+                  case 'Engine fixing (USD/SSP)':
+                    return `Engine mid: ${value}`;
+                  case 'Manual overrides':
+                    return `Manual fixing: ${value}`;
+                  case 'Volatility band (upper)':
+                    return `Upper vol band: ${value}`;
+                  case 'Volatility band (lower)':
+                    return `Lower vol band: ${value}`;
+                  default:
+                    return `${ctx.dataset.label}: ${value}`;
                 }
-                return `Engine mid: ${value}`;
               },
             },
           },
@@ -321,8 +384,10 @@ export function AdminAnalyticsCard() {
         In this window, the system has{' '}
         <span className="font-semibold">{markers.length}</span> manual USD/SSP
         overrides captured in{' '}
-        <code className="rounded bg-zinc-900 px-1">manual_fixings</code>. These
-        are shown as green dots over the engine&apos;s computed fixing path.
+        <code className="rounded bg-zinc-900 px-1">manual_fixings</code>.
+        Days with overrides are highlighted as green markers. The grey dashed
+        envelope shows a 30-day rolling volatility band around the engine
+        fixing, helping you see when the market is moving abnormally fast.
       </p>
     </section>
   );
