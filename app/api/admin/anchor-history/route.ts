@@ -10,63 +10,29 @@ const WINDOW_TO_DAYS: Record<Exclude<WindowKey, "all">, number> = {
   "365d": 365,
 };
 
-/**
- * /api/admin/anchor-history
- *
- * Source of truth for the Central Bank admin chart.
- * Reads from the `fx_daily_rates_default` view so we only ever show the
- * canonical, de-duplicated time-series that the engine itself relies on.
- *
- * Query params:
- *   - pair:  "USD/SSP" style string (preferred)
- *   - base:  optional fallback if `pair` not provided
- *   - quote: optional fallback if `pair` not provided
- *   - window: "90d" | "365d" | "all"
- */
 export async function GET(req: NextRequest) {
-  // NOTE: supabaseServer is already a Supabase client instance in this project
+  // IMPORTANT: supabaseServer is already a client, do NOT call it
   const supabase = supabaseServer;
 
+  // Parse URL params
   const url = new URL(req.url);
   const searchParams = url.searchParams;
 
-  const windowParamRaw = (searchParams.get("window") ?? WINDOW_DEFAULT).toLowerCase();
+  const base = (searchParams.get("base") ?? "USD").toUpperCase();
+  const quote = (searchParams.get("quote") ?? "SSP").toUpperCase();
 
-  // Normalise and clamp to allowed values
-  const windowParam: WindowKey =
-    windowParamRaw === "90d" || windowParamRaw === "365d" || windowParamRaw === "all"
-      ? (windowParamRaw as WindowKey)
-      : WINDOW_DEFAULT;
+  let windowParam = (searchParams.get("window") ?? WINDOW_DEFAULT) as WindowKey;
 
-  const pairParam = searchParams.get("pair");
-
-  let base = searchParams.get("base");
-  let quote = searchParams.get("quote");
-
-  if (pairParam && pairParam.includes("/")) {
-    const [maybeBase, maybeQuote] = pairParam.split("/");
-    base = base ?? maybeBase;
-    quote = quote ?? maybeQuote;
+  if (!["90d", "365d", "all"].includes(windowParam)) {
+    windowParam = WINDOW_DEFAULT;
   }
 
-  if (!base || !quote) {
-    return NextResponse.json(
-      {
-        error:
-          "Missing or invalid pair. Provide either `pair=USD/SSP` or `base=USD&quote=SSP`.",
-      },
-      { status: 400 },
-    );
-  }
+  console.log(">> API WINDOW:", windowParam);
 
-  const baseCurrency = base.toUpperCase();
-  const quoteCurrency = quote.toUpperCase();
-
-  // Resolve window → date lower bound (or null for "all")
+  // Compute date filter ONLY for 90d / 365d
   let sinceDate: string | null = null;
 
   if (windowParam !== "all") {
-    // Here TS knows windowParam is "90d" | "365d" – we just assert it explicitly
     const key = windowParam as Exclude<WindowKey, "all">;
     const days = WINDOW_TO_DAYS[key];
 
@@ -75,59 +41,45 @@ export async function GET(req: NextRequest) {
     sinceDate = now.toISOString().slice(0, 10); // YYYY-MM-DD
   }
 
-  let query = supabase
-    .from("fx_daily_rates_default")
+  // Query FULL history from raw table fx_daily_rates
+  const query = supabase
+    .from("fx_daily_rates")
     .select(
-      "as_of_date, base_currency, quote_currency, rate_mid, is_manual_override, is_official, source_label",
+      `
+        as_of_date,
+        rate_mid,
+        base_currency,
+        quote_currency
+      `
     )
-    .eq("base_currency", baseCurrency)
-    .eq("quote_currency", quoteCurrency)
+    .eq("base_currency", base)
+    .eq("quote_currency", quote)
     .order("as_of_date", { ascending: true });
 
   if (sinceDate) {
-    query = query.gte("as_of_date", sinceDate);
+    query.gte("as_of_date", sinceDate);
   }
 
   const { data, error } = await query;
 
   if (error) {
-    console.error("[anchor-history] Supabase error:", error);
-    return NextResponse.json(
-      { error: "Failed to load anchor history." },
-      { status: 500 },
-    );
+    console.error("ANCHOR HISTORY ERROR:", error);
+    return NextResponse.json({ error: error.message }, { status: 500 });
   }
 
-  const safeRows = (data ?? []).filter(
-    (row) => row && row.as_of_date && row.rate_mid != null,
-  );
-
-  const history = safeRows.map((row) => ({
-    date: row.as_of_date as string,
-    mid: Number(row.rate_mid),
-    isManualOverride: Boolean(row.is_manual_override),
-    isOfficial: Boolean(row.is_official),
-    sourceLabel: row.source_label as string | null,
+  // Transform into chart-ready array of { x, y }
+  const series = (data ?? []).map((row) => ({
+    x: row.as_of_date,
+    y: Number(row.rate_mid),
   }));
 
-  const overrideMarkers = history
-    .filter((row) => row.isManualOverride)
-    .map((row) => ({
-      date: row.date,
-      mid: row.mid,
-    }));
-
-  return NextResponse.json({
-    pair: `${baseCurrency}/${quoteCurrency}`,
-    baseCurrency,
-    quoteCurrency,
+  const response = {
+    base,
+    quote,
     window: windowParam,
-    history,
-    overrideMarkers,
-    _meta: {
-      rows: history.length,
-      overrides: overrideMarkers.length,
-      source: "fx_daily_rates_default",
-    },
-  });
+    count: series.length,
+    series,
+  };
+
+  return NextResponse.json(response);
 }
