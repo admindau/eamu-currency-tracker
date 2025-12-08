@@ -1,124 +1,139 @@
 // app/api/admin/anchor-history/route.ts
 
-import { NextRequest, NextResponse } from "next/server";
-import { supabaseServer } from "@/lib/supabase/server";
+import { NextRequest, NextResponse } from 'next/server';
+import { supabaseServer } from '@/lib/supabase/server';
 
-/**
- * Small helper to work out the date window.
- * window = "90d" | "365d" | "all"
- */
-function getWindowBounds(window: string) {
-  const now = new Date();
-  let from: string | null = null;
+type WindowKey = '90d' | '365d' | 'all';
 
-  if (window === "90d") {
-    const d = new Date(now);
-    d.setDate(d.getDate() - 90);
-    from = d.toISOString().slice(0, 10);
-  } else if (window === "365d") {
-    const d = new Date(now);
-    d.setDate(d.getDate() - 365);
-    from = d.toISOString().slice(0, 10);
-  } else {
-    // "all" – no lower bound
-    from = null;
-  }
+const DEFAULT_PAIR = 'USD/SSP';
+const DEFAULT_WINDOW: WindowKey = '365d';
 
-  return { from, today: now.toISOString().slice(0, 10) };
+function parseWindowParam(raw: string | null): WindowKey {
+  if (!raw) return DEFAULT_WINDOW;
+  const v = raw.toLowerCase();
+  if (v === '90d' || v === '365d' || v === 'all') return v;
+  return DEFAULT_WINDOW;
 }
 
-type FxDailyRateRow = {
-  as_of_date: string;
-  base_currency: string;
-  quote_currency: string;
-  mid_rate: number;
-  is_manual_override?: boolean | null;
-  source_label?: string | null;
-};
-
 /**
- * GET /api/admin/anchor-history?window=90d|365d|all
- *
- * Returns history for the anchor pair USD/SSP from the
- * fx_daily_rates_default view, shaped so the A-Mode chart
- * can consume it.
+ * Returns a YYYY-MM-DD string for the lower bound of the window,
+ * or null if we should return all available history.
  */
+function getFromDateForWindow(window: WindowKey): string | null {
+  if (window === 'all') return null;
+
+  const days = window === '90d' ? 90 : 365;
+  const now = new Date();
+  now.setDate(now.getDate() - days);
+  return now.toISOString().slice(0, 10);
+}
+
 export async function GET(req: NextRequest) {
-  // NOTE: supabaseServer is already a SupabaseClient instance, not a function
+  // ✅ FIX: supabaseServer is already a client instance, not a function
   const supabase = supabaseServer;
 
-  const searchParams = req.nextUrl.searchParams;
-  const window = (searchParams.get("window") ?? "365d").toLowerCase();
+  const url = new URL(req.url);
+  const searchParams = url.searchParams;
 
-  const { from, today } = getWindowBounds(window);
+  const pairParam = searchParams.get('pair') ?? DEFAULT_PAIR;
+  const windowParam = parseWindowParam(searchParams.get('window'));
 
-  // Base query against the read-only engine view
+  const [base, quote] = pairParam.split('/');
+
+  if (!base || !quote) {
+    return NextResponse.json(
+      { error: 'Invalid pair. Expected something like "USD/SSP".' },
+      { status: 400 },
+    );
+  }
+
+  // Base query against fx_daily_rates_default: this view already joins fx_sources
+  // and exposes whether the row is a manual override.
   let query = supabase
-    .from("fx_daily_rates_default")
+    .from('fx_daily_rates_default')
     .select(
-      "as_of_date, base_currency, quote_currency, mid_rate, is_manual_override, source_label",
+      'as_of_date, rate_mid, is_manual_override, is_official, source_label',
     )
-    .eq("base_currency", "USD")
-    .eq("quote_currency", "SSP")
-    .order("as_of_date", { ascending: true });
+    .eq('base_currency', base)
+    .eq('quote_currency', quote)
+    .order('as_of_date', { ascending: true });
 
-  if (from) {
-    query = query.gte("as_of_date", from);
+  const fromDate = getFromDateForWindow(windowParam);
+  if (fromDate) {
+    query = query.gte('as_of_date', fromDate);
   }
 
   const { data, error } = await query;
 
   if (error) {
-    console.error("[anchor-history] Supabase error:", error);
+    console.error('Error loading anchor history:', error);
     return NextResponse.json(
       {
-        error: error.message,
-        history: [],
-        summary: null,
-        debug: {
-          window,
-          from,
-          today,
-          source: "fx_daily_rates_default",
-        },
+        error: 'Failed to load anchor history',
+        details: error.message,
       },
       { status: 500 },
     );
   }
 
-  const rows = (data ?? []) as FxDailyRateRow[];
+  const rows = data ?? [];
 
-  // Shape to what AdminAnalyticsCard expects:
-  // - history[] with `date` and `mid_rate`
-  const history = rows.map((row) => ({
-    date: row.as_of_date, // used as row.date ?? row.fixing_date ...
-    mid_rate: row.mid_rate, // used as row.mid ?? row.mid_rate ...
-    source_label: row.source_label ?? null,
+  // Normalised points for AdminAnalyticsCard
+  const points = rows.map((row: any) => ({
+    // date fields
+    as_of_date: row.as_of_date,
+    value_date: row.as_of_date,
+    date: row.as_of_date,
+
+    // rate fields
+    rate_mid: row.rate_mid,
+    mid_rate: row.rate_mid,
+    value: row.rate_mid,
+    mid: row.rate_mid,
+
+    // flags
     is_manual_override: row.is_manual_override ?? false,
+    is_manual: row.is_manual_override ?? false,
+    is_override: row.is_manual_override ?? false,
+    is_official_override: row.is_manual_override ?? false,
+    is_official: row.is_official ?? false,
+
+    // source / origin
+    source_label: row.source_label ?? null,
+    source_name: row.source_label ?? null,
+    source: row.source_label ?? null,
+    origin: row.source_label ?? null,
+    provider: row.source_label ?? null,
   }));
 
-  const summary = {
-    window,
-    from,
-    today,
-    count: history.length,
-    base: "USD",
-    quote: "SSP",
-  };
+  const totalPoints = points.length;
+  const overrideDays = points.filter((p) => p.is_manual_override).length;
 
-  const debug = {
-    window,
-    from,
-    today,
-    source: "fx_daily_rates_default",
-  };
+  const firstDate = totalPoints > 0 ? points[0].as_of_date : null;
+  const lastDate =
+    totalPoints > 0 ? points[totalPoints - 1].as_of_date : null;
 
-  return NextResponse.json(
-    {
-      history,
-      summary,
-      debug,
+  const windowLabel =
+    windowParam === 'all'
+      ? 'All available history'
+      : windowParam === '90d'
+      ? 'Last 90 days'
+      : 'Last 365 days';
+
+  return NextResponse.json({
+    pair: `${base}/${quote}`,
+    window: {
+      key: windowParam,
+      label: windowLabel,
+      from: fromDate,
+      to: lastDate,
     },
-    { status: 200 },
-  );
+    points,
+    stats: {
+      total_points: totalPoints,
+      override_days: overrideDays,
+      first_date: firstDate,
+      last_date: lastDate,
+    },
+  });
 }
