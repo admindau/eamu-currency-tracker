@@ -36,12 +36,65 @@ type MarkerPoint = {
   mid: number;
 };
 
+type PairOption = {
+  id: string;
+  label: string;
+  base: string;
+  quote: string;
+};
+
+// Central-bank focus pairs. You can tweak this list anytime.
+const pairOptions: PairOption[] = [
+  {
+    id: 'USD/SSP',
+    label: 'USD / SSP (anchor)',
+    base: 'USD',
+    quote: 'SSP',
+  },
+  {
+    id: 'SSP/KES',
+    label: 'SSP / KES',
+    base: 'SSP',
+    quote: 'KES',
+  },
+  {
+    id: 'SSP/UGX',
+    label: 'SSP / UGX',
+    base: 'SSP',
+    quote: 'UGX',
+  },
+  {
+    id: 'SSP/RWF',
+    label: 'SSP / RWF',
+    base: 'SSP',
+    quote: 'RWF',
+  },
+  {
+    id: 'SSP/TZS',
+    label: 'SSP / TZS',
+    base: 'SSP',
+    quote: 'TZS',
+  },
+  {
+    id: 'SSP/BIF',
+    label: 'SSP / BIF',
+    base: 'SSP',
+    quote: 'BIF',
+  },
+];
+
 export function AdminAnalyticsCard() {
   const [mode, setMode] = useState<WindowMode>('365d');
+  const [pairId, setPairId] = useState<string>('USD/SSP');
   const [history, setHistory] = useState<HistoryPoint[]>([]);
   const [markers, setMarkers] = useState<MarkerPoint[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+
+  const activePair =
+    pairOptions.find((p) => p.id === pairId) ?? pairOptions[0];
+
+  const pairLabel = `${activePair.base}/${activePair.quote}`;
 
   useEffect(() => {
     let cancelled = false;
@@ -51,22 +104,32 @@ export function AdminAnalyticsCard() {
       setError(null);
 
       try {
-        // 1) Engine history for USD/SSP
-        const daysParam =
-          mode === 'all' ? '' : `?days=${mode === '90d' ? 90 : 365}`;
+        const params = new URLSearchParams({
+          base: activePair.base,
+          quote: activePair.quote,
+          window: mode,
+        });
 
-        const historyRes = await fetch(
-          `/api/v1/rates/history?base=SSP&quote=USD${daysParam}`,
-          { next: { revalidate: 60 } },
+        const res = await fetch(
+          `/api/admin/anchor-history?${params.toString()}`,
+          { cache: 'no-store' },
         );
 
-        const historyJson = await historyRes.json();
+        if (!res.ok) {
+          throw new Error(
+            `Failed to load anchor history (${res.status})`,
+          );
+        }
 
-        const historySource = Array.isArray(historyJson)
-          ? historyJson
-          : historyJson.points ??
-            historyJson.history ??
-            historyJson.data ??
+        const json = await res.json();
+
+        // Try a few common shapes for history + overrides
+        const historySource = Array.isArray(json)
+          ? json
+          : json.history ??
+            json.points ??
+            json.series ??
+            json.data ??
             [];
 
         const parsedHistory: HistoryPoint[] = Array.isArray(historySource)
@@ -79,10 +142,7 @@ export function AdminAnalyticsCard() {
                   row.t;
 
                 const midRaw =
-                  row.mid ??
-                  row.mid_rate ??
-                  row.rate ??
-                  row.value;
+                  row.mid ?? row.mid_rate ?? row.rate ?? row.value;
 
                 const mid =
                   typeof midRaw === 'string'
@@ -96,24 +156,13 @@ export function AdminAnalyticsCard() {
               .filter(Boolean) as HistoryPoint[])
           : [];
 
-        // 2) Manual overrides for USD/SSP
-        const overridesRes = await fetch(
-          `/api/admin/manual-rate?pair=USD/SSP`,
-          { cache: 'no-store' },
-        );
-
-        let markersSource: any[] = [];
-
-        if (overridesRes.ok) {
-          const overridesJson = await overridesRes.json();
-          markersSource = Array.isArray(overridesJson)
-            ? overridesJson
-            : overridesJson.rows ??
-              overridesJson.data ??
-              overridesJson.fixings ??
-              overridesJson.overrides ??
-              [];
-        }
+        const markersSource = Array.isArray(json)
+          ? []
+          : json.overrides ??
+            json.markers ??
+            json.manual_fixings ??
+            json.manual ??
+            [];
 
         const parsedMarkers: MarkerPoint[] = Array.isArray(markersSource)
           ? (markersSource
@@ -125,10 +174,7 @@ export function AdminAnalyticsCard() {
                   row.override_date;
 
                 const midRaw =
-                  row.mid ??
-                  row.mid_rate ??
-                  row.rate ??
-                  row.value;
+                  row.mid ?? row.mid_rate ?? row.rate ?? row.value;
 
                 const mid =
                   typeof midRaw === 'string'
@@ -160,7 +206,7 @@ export function AdminAnalyticsCard() {
     return () => {
       cancelled = true;
     };
-  }, [mode]);
+  }, [mode, activePair.base, activePair.quote]);
 
   // Small helper to compute rolling std over a window
   function computeVolBands(values: number[], windowSize: number) {
@@ -190,24 +236,20 @@ export function AdminAnalyticsCard() {
   }
 
   const chartData = useMemo(() => {
-    // labels & engine series
     const labels = history.map((p) => p.date);
     const engineData = history.map((p) => p.mid);
 
-    // Volatility bands: 30-day rolling window
     const windowSize = 30;
     const { upper: volUpper, lower: volLower } = computeVolBands(
       engineData,
       windowSize,
     );
 
-    // build a lookup of overrides keyed by date
     const markerMap = new Map<string, number>();
     for (const m of markers) {
       markerMap.set(m.date, m.mid);
     }
 
-    // override markers aligned to labels (number | null[])
     const markerData = labels.map((date) => {
       const v = markerMap.get(date);
       return v !== undefined ? v : null;
@@ -217,7 +259,7 @@ export function AdminAnalyticsCard() {
       labels,
       datasets: [
         {
-          label: 'Engine fixing (USD/SSP)',
+          label: `Engine fixing (${pairLabel})`,
           data: engineData,
           borderColor: 'rgba(255,255,255,0.9)',
           backgroundColor: 'rgba(255,255,255,0.08)',
@@ -247,7 +289,6 @@ export function AdminAnalyticsCard() {
           borderDash: [6, 4],
         },
         {
-          // Overrides rendered as green dots on the line
           label: 'Manual overrides',
           data: markerData,
           showLine: false,
@@ -257,8 +298,8 @@ export function AdminAnalyticsCard() {
           pointHoverRadius: 6,
         },
       ],
-    } as any; // relax TS about mixed series
-  }, [history, markers]);
+    } as any;
+  }, [history, markers, pairLabel]);
 
   const options = useMemo(
     () =>
@@ -304,7 +345,7 @@ export function AdminAnalyticsCard() {
                   ctx.parsed.y?.toLocaleString?.() ?? ctx.parsed.y;
 
                 switch (ctx.dataset.label) {
-                  case 'Engine fixing (USD/SSP)':
+                  case `Engine fixing (${pairLabel})`:
                     return `Engine mid: ${value}`;
                   case 'Manual overrides':
                     return `Manual fixing: ${value}`;
@@ -320,7 +361,7 @@ export function AdminAnalyticsCard() {
           },
         },
       }) as any,
-    [mode],
+    [mode, pairLabel],
   );
 
   const windowLabel =
@@ -332,31 +373,52 @@ export function AdminAnalyticsCard() {
 
   return (
     <section className="flex h-full flex-col rounded-2xl border border-zinc-800 bg-black/40 p-6">
-      <header className="mb-4 flex items-center justify-between gap-4">
+      <header className="mb-4 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
         <div>
           <h2 className="text-sm font-semibold text-zinc-200">
-            Volatility and anchor-pair history for USD/SSP,
+            Volatility and pair history for {pairLabel},
           </h2>
           <p className="text-xs text-zinc-500">
             using live engine data. Viewing {windowLabel}.
           </p>
         </div>
 
-        <div className="inline-flex rounded-full bg-zinc-900 p-1 text-xs">
-          {(['90d', '365d', 'all'] as WindowMode[]).map((value) => (
-            <button
-              key={value}
-              type="button"
-              onClick={() => setMode(value)}
-              className={`rounded-full px-3 py-1 transition ${
-                mode === value
-                  ? 'bg-emerald-500 text-black'
-                  : 'text-zinc-400 hover:text-zinc-100'
-              }`}
-            >
-              {value === 'all' ? 'All' : value}
-            </button>
-          ))}
+        <div className="flex flex-col items-stretch gap-2 sm:items-end">
+          {/* Pair selector */}
+          <div className="inline-flex flex-wrap justify-end gap-1">
+            {pairOptions.map((p) => (
+              <button
+                key={p.id}
+                type="button"
+                onClick={() => setPairId(p.id)}
+                className={`rounded-full px-3 py-1 text-[11px] transition ${
+                  p.id === activePair.id
+                    ? 'bg-white text-black'
+                    : 'bg-zinc-900 text-zinc-400 hover:text-zinc-100'
+                }`}
+              >
+                {p.label}
+              </button>
+            ))}
+          </div>
+
+          {/* Window selector */}
+          <div className="inline-flex rounded-full bg-zinc-900 p-1 text-xs">
+            {(['90d', '365d', 'all'] as WindowMode[]).map((value) => (
+              <button
+                key={value}
+                type="button"
+                onClick={() => setMode(value)}
+                className={`rounded-full px-3 py-1 transition ${
+                  mode === value
+                    ? 'bg-emerald-500 text-black'
+                    : 'text-zinc-400 hover:text-zinc-100'
+                }`}
+              >
+                {value === 'all' ? 'All' : value}
+              </button>
+            ))}
+          </div>
         </div>
       </header>
 
@@ -382,12 +444,12 @@ export function AdminAnalyticsCard() {
 
       <p className="mt-3 text-[11px] text-zinc-500">
         In this window, the system has{' '}
-        <span className="font-semibold">{markers.length}</span> manual USD/SSP
-        overrides captured in{' '}
+        <span className="font-semibold">{markers.length}</span> manual{' '}
+        {pairLabel} overrides captured in{' '}
         <code className="rounded bg-zinc-900 px-1">manual_fixings</code>.
         Days with overrides are highlighted as green markers. The grey dashed
         envelope shows a 30-day rolling volatility band around the engine
-        fixing, helping you see when the market is moving abnormally fast.
+        fixing so you can see when the market is moving abnormally fast.
       </p>
     </section>
   );
