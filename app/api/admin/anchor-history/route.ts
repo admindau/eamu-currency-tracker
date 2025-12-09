@@ -9,44 +9,12 @@ const WINDOW_TO_DAYS: Record<Exclude<WindowKey, "all">, number> = {
   "365d": 365,
 };
 
-/**
- * Resolve a pair string into the actual base / quote used in fx_daily_rates_default.
- *
- * Rules:
- * - Strip "/" and uppercase the value.
- * - If either side is SSP, SSP is always the base currency.
- * - Otherwise, assume first 3 chars = base, last 3 chars = quote.
- * - On malformed input, fall back to SSP / USD (engine anchor).
- */
-function resolvePair(pairParam: string): { base_currency: string; quote_currency: string } {
-  const clean = pairParam.replace("/", "").toUpperCase();
-
-  if (clean.length !== 6) {
-    // Fallback: anchor orientation used by the engine
-    return { base_currency: "SSP", quote_currency: "USD" };
-  }
-
-  const a = clean.slice(0, 3);
-  const b = clean.slice(3);
-
-  // If SSP appears on either side, it is always the base in the engine
-  if (a === "SSP" || b === "SSP") {
-    return {
-      base_currency: "SSP",
-      quote_currency: a === "SSP" ? b : a,
-    };
-  }
-
-  // Generic non-SSP pair (kept for future flexibility)
-  return {
-    base_currency: a,
-    quote_currency: b,
-  };
-}
+// Anchor pair is SSP as base, USD as quote
+const DEFAULT_PAIR = "SSPUSD";
 
 export async function GET(req: NextRequest) {
   try {
-    // IMPORTANT: supabaseServer is already a client, DO NOT CALL IT
+    // supabaseServer is already a configured client (do NOT call it)
     const supabase = supabaseServer;
 
     // ============================
@@ -55,14 +23,17 @@ export async function GET(req: NextRequest) {
     const url = new URL(req.url);
     const searchParams = url.searchParams;
 
-    const pairParamRaw = searchParams.get("pair") || "USDSSP";
+    const pairParamRaw = (searchParams.get("pair") || DEFAULT_PAIR).toUpperCase();
     const windowParamRaw = (searchParams.get("window") || "365d").toLowerCase();
 
-    const windowParam: WindowKey = WINDOW_OPTIONS.includes(windowParamRaw as WindowKey)
+    const windowParam: WindowKey = WINDOW_OPTIONS.includes(
+      windowParamRaw as WindowKey,
+    )
       ? (windowParamRaw as WindowKey)
       : "365d";
 
-    const { base_currency, quote_currency } = resolvePair(pairParamRaw);
+    const base_currency = pairParamRaw.slice(0, 3);
+    const quote_currency = pairParamRaw.slice(3);
 
     // ============================
     // 2. Date window
@@ -70,7 +41,7 @@ export async function GET(req: NextRequest) {
     let sinceDate: string | null = null;
 
     if (windowParam !== "all") {
-      const days = WINDOW_TO_DAYS[windowParam];
+      const days = WINDOW_TO_DAYS[windowParam as Exclude<WindowKey, "all">];
       const since = new Date();
       since.setDate(since.getDate() - days);
       sinceDate = since.toISOString().slice(0, 10); // YYYY-MM-DD
@@ -88,7 +59,7 @@ export async function GET(req: NextRequest) {
         quote_currency,
         rate_mid,
         is_manual_override
-      `
+      `,
       )
       .eq("base_currency", base_currency)
       .eq("quote_currency", quote_currency)
@@ -102,7 +73,10 @@ export async function GET(req: NextRequest) {
 
     if (engineError) {
       console.error("Engine fetch error:", engineError);
-      return NextResponse.json({ error: "Failed to fetch engine history" }, { status: 500 });
+      return NextResponse.json(
+        { error: "Failed to fetch engine history" },
+        { status: 500 },
+      );
     }
 
     // ============================
@@ -117,7 +91,7 @@ export async function GET(req: NextRequest) {
         quote_currency,
         rate_mid,
         created_at
-      `
+      `,
       )
       .eq("base_currency", base_currency)
       .eq("quote_currency", quote_currency)
@@ -131,20 +105,23 @@ export async function GET(req: NextRequest) {
 
     if (overrideError) {
       console.error("Override fetch error:", overrideError);
-      return NextResponse.json({ error: "Failed to fetch overrides" }, { status: 500 });
+      return NextResponse.json(
+        { error: "Failed to fetch overrides" },
+        { status: 500 },
+      );
     }
 
     // ============================
     // 5. Shape response for the chart
     // ============================
     const history = (engineRates ?? []).map((r) => ({
-      date: r.as_of_date,
-      mid: Number(r.rate_mid),
+      date: r.as_of_date as string,
+      mid: Number(r.rate_mid ?? 0),
     }));
 
     const overrideMarkers = (overrides ?? []).map((o) => ({
-      date: o.as_of_date,
-      mid: Number(o.rate_mid),
+      date: o.as_of_date as string,
+      mid: Number(o.rate_mid ?? 0),
     }));
 
     return NextResponse.json({
