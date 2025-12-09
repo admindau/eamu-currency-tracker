@@ -53,7 +53,7 @@ export async function GET(req: NextRequest) {
     console.error("GET manual_fixings error:", error);
     return NextResponse.json(
       { error: "Failed to fetch manual fixings." },
-      { status: 500 }
+      { status: 500 },
     );
   }
 
@@ -67,7 +67,7 @@ export async function POST(req: NextRequest) {
 
   let body: ManualFixingPayload;
   try {
-    body = (await req.json()) as ManualFixingPayload;
+    body = await req.json();
   } catch {
     return NextResponse.json({ error: "Invalid JSON body." }, { status: 400 });
   }
@@ -80,11 +80,11 @@ export async function POST(req: NextRequest) {
   ) {
     return NextResponse.json(
       { error: "Missing or invalid required fields." },
-      { status: 400 }
+      { status: 400 },
     );
   }
 
-  const insertPayload: Record<string, unknown> = {
+  const insertPayload: any = {
     as_of_date: body.as_of_date,
     base_currency: body.base_currency,
     quote_currency: body.quote_currency,
@@ -104,7 +104,7 @@ export async function POST(req: NextRequest) {
     console.error("POST manual_fixings error:", error);
     return NextResponse.json(
       { error: "Failed to create manual fixing." },
-      { status: 500 }
+      { status: 500 },
     );
   }
 
@@ -118,19 +118,16 @@ export async function PUT(req: NextRequest) {
 
   let body: ManualFixingPayload;
   try {
-    body = (await req.json()) as ManualFixingPayload;
+    body = await req.json();
   } catch {
     return NextResponse.json({ error: "Invalid JSON body." }, { status: 400 });
   }
 
   if (!body.id) {
-    return NextResponse.json(
-      { error: "Missing id for update." },
-      { status: 400 }
-    );
+    return NextResponse.json({ error: "Missing id for update." }, { status: 400 });
   }
 
-  const updatePayload: Record<string, unknown> = {
+  const updatePayload: any = {
     as_of_date: body.as_of_date,
     base_currency: body.base_currency,
     quote_currency: body.quote_currency,
@@ -151,51 +148,57 @@ export async function PUT(req: NextRequest) {
     console.error("PUT manual_fixings error:", error);
     return NextResponse.json(
       { error: "Failed to update manual fixing." },
-      { status: 500 }
+      { status: 500 },
     );
   }
 
   return NextResponse.json({ data });
 }
 
-// DELETE /api/admin/manual-fixings?id=...
+// DELETE /api/admin/manual-fixings?id=...  OR  body: { id: "..." }
 export async function DELETE(req: NextRequest) {
   const supabase = supabaseServer;
-  const url = new URL(req.url);
-  const id = url.searchParams.get("id");
 
+  // 1) Try query param first
+  const url = new URL(req.url);
+  let id = url.searchParams.get("id");
+
+  // 2) Fallback: try JSON body { id: "..." }
   if (!id) {
-    return NextResponse.json(
-      { error: "Missing id for delete." },
-      { status: 400 }
-    );
+    try {
+      const body = (await req.json()) as Partial<ManualFixingPayload>;
+      if (body.id) id = body.id;
+    } catch {
+      // ignore JSON parse error – we'll handle missing id below
+    }
   }
 
-  // IMPORTANT: treat "0 rows deleted" as an error
+  if (!id) {
+    return NextResponse.json({ error: "Missing id for delete." }, { status: 400 });
+  }
+
   const { data, error } = await supabase
     .from("manual_fixings")
     .delete()
     .eq("id", id)
-    .select("id");
+    .select("id")
+    .maybeSingle();
 
   if (error) {
     console.error("DELETE manual_fixings error:", error);
     return NextResponse.json(
       { error: "Failed to delete manual fixing." },
-      { status: 500 }
+      { status: 500 },
     );
   }
 
-  if (!data || data.length === 0) {
-    console.warn(
-      "DELETE manual_fixings: no row found with id:",
-      id
-    );
+  if (!data) {
+    // No row matched that id – useful signal for us
     return NextResponse.json(
-      { error: "Manual fixing not found." },
-      { status: 404 }
+      { error: "No manual fixing found for that id." },
+      { status: 404 },
     );
   }
 
-  return NextResponse.json({ success: true, deleted: data[0].id });
+  return NextResponse.json({ success: true });
 }
