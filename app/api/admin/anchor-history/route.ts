@@ -1,9 +1,8 @@
 import { NextRequest, NextResponse } from "next/server";
 import { supabaseServer } from "@/lib/supabase/server";
 
-type WindowKey = "90d" | "365d" | "all";
-
-const WINDOW_DEFAULT: WindowKey = "365d";
+const WINDOW_OPTIONS = ["90d", "365d", "all"] as const;
+type WindowKey = (typeof WINDOW_OPTIONS)[number];
 
 const WINDOW_TO_DAYS: Record<Exclude<WindowKey, "all">, number> = {
   "90d": 90,
@@ -11,75 +10,117 @@ const WINDOW_TO_DAYS: Record<Exclude<WindowKey, "all">, number> = {
 };
 
 export async function GET(req: NextRequest) {
-  // IMPORTANT: supabaseServer is already a client, do NOT call it
-  const supabase = supabaseServer;
+  try {
+    // IMPORTANT: supabaseServer is already a client, DO NOT CALL IT
+    const supabase = supabaseServer;
 
-  // Parse URL params
-  const url = new URL(req.url);
-  const searchParams = url.searchParams;
+    // ============================
+    // 1. Parse URL params
+    // ============================
+    const url = new URL(req.url);
+    const searchParams = url.searchParams;
 
-  const base = (searchParams.get("base") ?? "USD").toUpperCase();
-  const quote = (searchParams.get("quote") ?? "SSP").toUpperCase();
+    const pairParam = searchParams.get("pair") || "USDSSP";
+    const windowParam = (searchParams.get("window") || "365d").toLowerCase() as WindowKey;
 
-  let windowParam = (searchParams.get("window") ?? WINDOW_DEFAULT) as WindowKey;
+    if (!WINDOW_OPTIONS.includes(windowParam)) {
+      return NextResponse.json({ error: "Invalid window value." }, { status: 400 });
+    }
 
-  if (!["90d", "365d", "all"].includes(windowParam)) {
-    windowParam = WINDOW_DEFAULT;
-  }
+    const base_currency = pairParam.slice(0, 3);
+    const quote_currency = pairParam.slice(3);
 
-  console.log(">> API WINDOW:", windowParam);
+    // ============================
+    // 2. Date window
+    // ============================
+    let sinceDate: string | null = null;
 
-  // Compute date filter ONLY for 90d / 365d
-  let sinceDate: string | null = null;
+    if (windowParam !== "all") {
+      const days = WINDOW_TO_DAYS[windowParam as Exclude<WindowKey, "all">];
+      const since = new Date();
+      since.setDate(since.getDate() - days);
+      sinceDate = since.toISOString().slice(0, 10); // YYYY-MM-DD
+    }
 
-  if (windowParam !== "all") {
-    const key = windowParam as Exclude<WindowKey, "all">;
-    const days = WINDOW_TO_DAYS[key];
-
-    const now = new Date();
-    now.setDate(now.getDate() - days);
-    sinceDate = now.toISOString().slice(0, 10); // YYYY-MM-DD
-  }
-
-  // Query FULL history from raw table fx_daily_rates
-  const query = supabase
-    .from("fx_daily_rates")
-    .select(
-      `
+    // ============================
+    // 3. Engine history from fx_daily_rates_default
+    // ============================
+    let ratesQuery = supabase
+      .from("fx_daily_rates_default")
+      .select(
+        `
         as_of_date,
-        rate_mid,
         base_currency,
-        quote_currency
+        quote_currency,
+        rate_mid,
+        is_manual_override
       `
-    )
-    .eq("base_currency", base)
-    .eq("quote_currency", quote)
-    .order("as_of_date", { ascending: true });
+      )
+      .eq("base_currency", base_currency)
+      .eq("quote_currency", quote_currency)
+      .order("as_of_date", { ascending: true });
 
-  if (sinceDate) {
-    query.gte("as_of_date", sinceDate);
+    if (sinceDate) {
+      ratesQuery = ratesQuery.gte("as_of_date", sinceDate);
+    }
+
+    const { data: engineRates, error: engineError } = await ratesQuery;
+
+    if (engineError) {
+      console.error("Engine fetch error:", engineError);
+      return NextResponse.json({ error: "Failed to fetch engine history" }, { status: 500 });
+    }
+
+    // ============================
+    // 4. Manual overrides from manual_fixings
+    // ============================
+    let overrideQuery = supabase
+      .from("manual_fixings")
+      .select(
+        `
+        as_of_date,
+        base_currency,
+        quote_currency,
+        rate_mid,
+        created_at
+      `
+      )
+      .eq("base_currency", base_currency)
+      .eq("quote_currency", quote_currency)
+      .order("as_of_date", { ascending: true });
+
+    if (sinceDate) {
+      overrideQuery = overrideQuery.gte("as_of_date", sinceDate);
+    }
+
+    const { data: overrides, error: overrideError } = await overrideQuery;
+
+    if (overrideError) {
+      console.error("Override fetch error:", overrideError);
+      return NextResponse.json({ error: "Failed to fetch overrides" }, { status: 500 });
+    }
+
+    // ============================
+    // 5. Shape response for the chart
+    // ============================
+    const history = (engineRates ?? []).map((r) => ({
+      date: r.as_of_date,
+      mid: Number(r.rate_mid),
+    }));
+
+    const overrideMarkers = (overrides ?? []).map((o) => ({
+      date: o.as_of_date,
+      mid: Number(o.rate_mid),
+    }));
+
+    return NextResponse.json({
+      pair: pairParam,
+      window: windowParam,
+      history,
+      overrides: overrideMarkers,
+    });
+  } catch (err) {
+    console.error("Anchor history route crashed:", err);
+    return NextResponse.json({ error: "Server crashed" }, { status: 500 });
   }
-
-  const { data, error } = await query;
-
-  if (error) {
-    console.error("ANCHOR HISTORY ERROR:", error);
-    return NextResponse.json({ error: error.message }, { status: 500 });
-  }
-
-  // Transform into chart-ready array of { x, y }
-  const series = (data ?? []).map((row) => ({
-    x: row.as_of_date,
-    y: Number(row.rate_mid),
-  }));
-
-  const response = {
-    base,
-    quote,
-    window: windowParam,
-    count: series.length,
-    series,
-  };
-
-  return NextResponse.json(response);
 }
