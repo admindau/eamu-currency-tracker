@@ -1,129 +1,174 @@
 // app/api/admin/manual-fixings/route.ts
+
 import { NextRequest, NextResponse } from "next/server";
 import { supabaseServer } from "@/lib/supabase/server";
 
-// Shape sent from ManualRateForm.tsx
+type Action = "create" | "update" | "delete";
+
 type ManualFixingPayload = {
-  asOfDate: string; // "YYYY-MM-DD"
-  quoteCurrency: string; // e.g. "USD"
-  rateMid: number; // mid rate as number
-  isOfficial: boolean;
+  id?: string | null;
+
+  as_of_date: string; // "YYYY-MM-DD"
+  base_currency: string; // e.g. "SSP"
+  quote_currency: string; // e.g. "USD"
+
+  rate_mid: number;
+
+  is_official?: boolean;
+  is_manual_override?: boolean;
+
+  notes?: string | null;
+
+  action?: Action;
 };
 
+function normalizePayload(raw: ManualFixingPayload): {
+  payload: ManualFixingPayload;
+  error?: string;
+} {
+  if (!raw.as_of_date) return { payload: raw, error: "Missing as_of_date" };
+  if (!raw.base_currency || !raw.quote_currency) {
+    return { payload: raw, error: "Missing base_currency or quote_currency" };
+  }
+  if (typeof raw.rate_mid !== "number" || Number.isNaN(raw.rate_mid)) {
+    return { payload: raw, error: "Invalid rate_mid" };
+  }
+
+  const payload: ManualFixingPayload = {
+    ...raw,
+    as_of_date: raw.as_of_date,
+    base_currency: raw.base_currency.toUpperCase(),
+    quote_currency: raw.quote_currency.toUpperCase(),
+    rate_mid: Number(raw.rate_mid),
+    is_official: raw.is_official ?? true,
+    is_manual_override: raw.is_manual_override ?? false,
+    notes: raw.notes ?? null,
+  };
+
+  return { payload };
+}
+
 export async function POST(req: NextRequest) {
+  const supabase = supabaseServer;
+
   try {
-    // NOTE: supabaseServer is already a client instance, do NOT call it.
-    const supabase = supabaseServer;
+    const body = (await req.json()) as ManualFixingPayload;
 
-    const body = (await req.json()) as ManualFixingPayload | null;
+    const action: Action =
+      body.action ??
+      (body.id ? "update" : "create"); // default: create if no ID, update if ID
 
-    if (!body) {
+    const { payload, error: validationError } = normalizePayload(body);
+    if (validationError) {
       return NextResponse.json(
-        { error: "Missing request body" },
-        { status: 400 }
+        { error: validationError },
+        { status: 400 },
       );
     }
 
-    const { asOfDate, quoteCurrency, rateMid, isOfficial } = body;
-
-    if (!asOfDate || !quoteCurrency || !Number.isFinite(rateMid)) {
-      return NextResponse.json(
-        {
-          error:
-            "asOfDate, quoteCurrency and rateMid are required for a manual fixing.",
-        },
-        { status: 400 }
-      );
-    }
-
-    // Get the current authenticated user so we can populate created_by
+    // Ensure we have an authenticated user (admin mode)
     const {
       data: { user },
-      error: userError,
+      error: authError,
     } = await supabase.auth.getUser();
 
-    if (userError || !user) {
+    if (authError || !user) {
+      console.error("manual-fixings auth error:", authError);
       return NextResponse.json(
-        { error: "Not authenticated or unable to resolve current user." },
-        { status: 401 }
+        { error: "Not authenticated" },
+        { status: 401 },
       );
     }
 
-    // Insert into public.manual_fixings
-    const { data, error } = await supabase
+    if (action === "delete") {
+      if (!payload.id) {
+        return NextResponse.json(
+          { error: "Missing id for delete" },
+          { status: 400 },
+        );
+      }
+
+      const { error: deleteError } = await supabase
+        .from("manual_fixings")
+        .delete()
+        .eq("id", payload.id);
+
+      if (deleteError) {
+        console.error("manual-fixings delete error:", deleteError);
+        return NextResponse.json(
+          { error: "Failed to delete manual fixing" },
+          { status: 500 },
+        );
+      }
+
+      return NextResponse.json({ ok: true, action: "delete" });
+    }
+
+    if (action === "create") {
+      const { data, error: insertError } = await supabase
+        .from("manual_fixings")
+        .insert({
+          as_of_date: payload.as_of_date,
+          base_currency: payload.base_currency,
+          quote_currency: payload.quote_currency,
+          rate_mid: payload.rate_mid,
+          is_official: payload.is_official,
+          is_manual_override: payload.is_manual_override,
+          notes: payload.notes,
+          created_by: user.id,
+          created_email: user.email ?? null,
+        })
+        .select("*")
+        .single();
+
+      if (insertError) {
+        console.error("manual-fixings insert error:", insertError);
+        return NextResponse.json(
+          { error: "Failed to create manual fixing" },
+          { status: 500 },
+        );
+      }
+
+      return NextResponse.json({ ok: true, action: "create", row: data });
+    }
+
+    // UPDATE
+    if (!payload.id) {
+      return NextResponse.json(
+        { error: "Missing id for update" },
+        { status: 400 },
+      );
+    }
+
+    const { data: updated, error: updateError } = await supabase
       .from("manual_fixings")
-      .insert({
-        as_of_date: asOfDate,
-        base_currency: "SSP", // anchor base for EAMU FX
-        quote_currency: quoteCurrency,
-        rate_mid: rateMid,
-        is_official: isOfficial,
-        is_manual_override: true,
-        notes: null,
-        created_by: user.id,
-        created_email: user.email ?? null,
+      .update({
+        as_of_date: payload.as_of_date,
+        base_currency: payload.base_currency,
+        quote_currency: payload.quote_currency,
+        rate_mid: payload.rate_mid,
+        is_official: payload.is_official,
+        is_manual_override: payload.is_manual_override,
+        notes: payload.notes,
       })
+      .eq("id", payload.id)
       .select("*")
       .single();
 
-    if (error) {
-      console.error("[manual-fixings] insert error:", error);
+    if (updateError) {
+      console.error("manual-fixings update error:", updateError);
       return NextResponse.json(
-        { error: error.message ?? "Failed to save manual fixing." },
-        { status: 500 }
+        { error: "Failed to update manual fixing" },
+        { status: 500 },
       );
     }
 
+    return NextResponse.json({ ok: true, action: "update", row: updated });
+  } catch (err) {
+    console.error("manual-fixings POST crashed:", err);
     return NextResponse.json(
-      {
-        manualFixing: data,
-        message: "Manual fixing saved successfully.",
-      },
-      { status: 200 }
-    );
-  } catch (err: any) {
-    console.error("[manual-fixings] unexpected error:", err);
-    return NextResponse.json(
-      {
-        error: "Unexpected error while saving manual fixing.",
-      },
-      { status: 500 }
-    );
-  }
-}
-
-export async function GET(req: NextRequest) {
-  try {
-    const supabase = supabaseServer;
-
-    const url = new URL(req.url);
-    const pair = url.searchParams.get("pair") || "USD/SSP";
-
-    const [quoteCurrency, baseCurrency] = pair.includes("/")
-      ? pair.split("/")
-      : ["USD", "SSP"];
-
-    const { data, error } = await supabase
-      .from("manual_fixings")
-      .select("*")
-      .eq("base_currency", baseCurrency)
-      .eq("quote_currency", quoteCurrency)
-      .order("as_of_date", { ascending: false });
-
-    if (error) {
-      console.error("[manual-fixings] GET error:", error);
-      return NextResponse.json(
-        { error: error.message ?? "Failed to load manual fixings." },
-        { status: 500 }
-      );
-    }
-
-    return NextResponse.json({ manualFixings: data ?? [] }, { status: 200 });
-  } catch (err: any) {
-    console.error("[manual-fixings] GET unexpected error:", err);
-    return NextResponse.json(
-      { error: "Unexpected error while loading manual fixings." },
-      { status: 500 }
+      { error: "Server crashed while handling manual-fixings" },
+      { status: 500 },
     );
   }
 }
