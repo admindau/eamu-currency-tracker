@@ -262,7 +262,6 @@ function AdminAnalyticsPanel({ overrides }: { overrides: ManualOverrideRow[] }) 
     showLine: false,
   };
 
-  // Cast to any so TS stops complaining about dataset unions
   const chartData: any = {
     labels,
     datasets: [engineSeries, overrideSeries],
@@ -426,6 +425,7 @@ export default function CentralBankDashboardPage() {
   const [showForm, setShowForm] = useState(false);
   const [savingForm, setSavingForm] = useState(false);
   const [formError, setFormError] = useState<string | null>(null);
+  const [editingRowId, setEditingRowId] = useState<string | null>(null);
 
   const [schedule, setSchedule] = useState<FixingScheduleRow | null>(null);
   const [loadingSchedule, setLoadingSchedule] = useState(true);
@@ -593,7 +593,9 @@ export default function CentralBankDashboardPage() {
           };
           setSchedule(normalised);
           setScheduleDate(row.next_fixing_date);
-          setScheduleWindow(row.window_label ?? "Normal fixing window");
+          setScheduleWindow(
+            row.window_label ?? "Normal fixing window"
+          );
           setScheduleNotes(row.notes ?? "");
         } else {
           setSchedule(null);
@@ -620,7 +622,38 @@ export default function CentralBankDashboardPage() {
     router.replace("/central-bank/login");
   }
 
-  async function handleCreateManualFixing(e: FormEvent) {
+  function resetFormToDefaults() {
+    const today = new Date().toISOString().slice(0, 10);
+    setFormDate(today);
+    setFormBase("SSP");
+    setFormQuote("USD");
+    setFormRate("");
+    setFormOfficial(true);
+    setFormOverride(false);
+    setFormNotes("");
+    setFormError(null);
+  }
+
+  function startCreateNew() {
+    setEditingRowId(null);
+    resetFormToDefaults();
+    setShowForm(true);
+  }
+
+  function startEditRow(row: ManualOverrideRow) {
+    setEditingRowId(row.id);
+    setFormDate(row.as_of_date);
+    setFormBase(row.base_currency);
+    setFormQuote(row.quote_currency);
+    setFormRate(String(row.rate_mid));
+    setFormOfficial(row.is_official);
+    setFormOverride(row.is_manual_override);
+    setFormNotes(row.notes ?? "");
+    setFormError(null);
+    setShowForm(true);
+  }
+
+  async function handleCreateOrUpdateManualFixing(e: FormEvent) {
     e.preventDefault();
     if (!user) return;
 
@@ -635,10 +668,11 @@ export default function CentralBankDashboardPage() {
     }
 
     try {
-      const { data, error } = await supabase
-        .from("manual_fixings")
-        .insert([
-          {
+      if (editingRowId) {
+        // UPDATE
+        const { data, error } = await supabase
+          .from("manual_fixings")
+          .update({
             as_of_date: formDate,
             base_currency: formBase,
             quote_currency: formQuote,
@@ -646,12 +680,66 @@ export default function CentralBankDashboardPage() {
             is_official: formOfficial,
             is_manual_override: formOverride,
             notes: formNotes.length ? formNotes : null,
-            created_by: user.id,
-            created_email: user.email ?? null,
-          },
-        ])
-        .select(
+          })
+          .eq("id", editingRowId)
+          .select(
+            `
+            id,
+            as_of_date,
+            base_currency,
+            quote_currency,
+            rate_mid,
+            is_official,
+            is_manual_override,
+            notes,
+            created_email,
+            created_at
           `
+          )
+          .single();
+
+        if (error) {
+          console.error("Failed to update manual_fixings:", error);
+          setFormError(error.message ?? "Failed to update manual fixing.");
+          setSavingForm(false);
+          return;
+        }
+
+        const updatedRow: ManualOverrideRow = {
+          id: data.id,
+          as_of_date: data.as_of_date,
+          base_currency: data.base_currency,
+          quote_currency: data.quote_currency,
+          rate_mid: Number(data.rate_mid),
+          is_official: data.is_official,
+          is_manual_override: data.is_manual_override,
+          notes: data.notes ?? null,
+          created_email: data.created_email ?? null,
+          created_at: data.created_at,
+        };
+
+        setOverrides((prev) =>
+          prev.map((row) => (row.id === updatedRow.id ? updatedRow : row))
+        );
+      } else {
+        // INSERT
+        const { data, error } = await supabase
+          .from("manual_fixings")
+          .insert([
+            {
+              as_of_date: formDate,
+              base_currency: formBase,
+              quote_currency: formQuote,
+              rate_mid: parsedRate,
+              is_official: formOfficial,
+              is_manual_override: formOverride,
+              notes: formNotes.length ? formNotes : null,
+              created_by: user.id,
+              created_email: user.email ?? null,
+            },
+          ])
+          .select(
+            `
           id,
           as_of_date,
           base_currency,
@@ -663,41 +751,73 @@ export default function CentralBankDashboardPage() {
           created_email,
           created_at
         `
-        )
-        .single();
+          )
+          .single();
 
-      if (error) {
-        console.error("Failed to insert manual_fixings:", error);
-        setFormError(error.message ?? "Failed to save manual fixing.");
-        setSavingForm(false);
-        return;
+        if (error) {
+          console.error("Failed to insert manual_fixings:", error);
+          setFormError(error.message ?? "Failed to save manual fixing.");
+          setSavingForm(false);
+          return;
+        }
+
+        const newRow: ManualOverrideRow = {
+          id: data.id,
+          as_of_date: data.as_of_date,
+          base_currency: data.base_currency,
+          quote_currency: data.quote_currency,
+          rate_mid: Number(data.rate_mid),
+          is_official: data.is_official,
+          is_manual_override: data.is_manual_override,
+          notes: data.notes ?? null,
+          created_email: data.created_email ?? null,
+          created_at: data.created_at,
+        };
+
+        setOverrides((prev) => [newRow, ...prev]);
       }
 
-      const newRow: ManualOverrideRow = {
-        id: data.id,
-        as_of_date: data.as_of_date,
-        base_currency: data.base_currency,
-        quote_currency: data.quote_currency,
-        rate_mid: Number(data.rate_mid),
-        is_official: data.is_official,
-        is_manual_override: data.is_manual_override,
-        notes: data.notes ?? null,
-        created_email: data.created_email ?? null,
-        created_at: data.created_at,
-      };
-
-      setOverrides((prev) => [newRow, ...prev]);
-
-      setFormRate("");
-      setFormNotes("");
-      setFormOfficial(true);
-      setFormOverride(false);
+      // Reset and close form
       setShowForm(false);
+      setEditingRowId(null);
+      resetFormToDefaults();
     } catch (err: any) {
-      console.error("Unexpected insert error:", err);
+      console.error("Unexpected manual_fixings save error:", err);
       setFormError("Unexpected error while saving.");
     } finally {
       setSavingForm(false);
+    }
+  }
+
+  async function handleDeleteRow(row: ManualOverrideRow) {
+    if (!user) return;
+    const ok = window.confirm(
+      `Delete manual fixing for ${row.base_currency}/${row.quote_currency} on ${row.as_of_date}?`
+    );
+    if (!ok) return;
+
+    try {
+      const { error } = await supabase
+        .from("manual_fixings")
+        .delete()
+        .eq("id", row.id);
+
+      if (error) {
+        console.error("Failed to delete manual_fixings:", error);
+        alert(error.message ?? "Failed to delete manual fixing.");
+        return;
+      }
+
+      setOverrides((prev) => prev.filter((r) => r.id !== row.id));
+
+      if (editingRowId === row.id) {
+        setEditingRowId(null);
+        resetFormToDefaults();
+        setShowForm(false);
+      }
+    } catch (err: any) {
+      console.error("Unexpected delete error:", err);
+      alert("Unexpected error while deleting fixing.");
     }
   }
 
@@ -839,6 +959,7 @@ export default function CentralBankDashboardPage() {
 
         <section className="grid gap-6 lg:grid-cols-[minmax(0,1.5fr)_minmax(0,1.1fr)]">
           <div className="space-y-6">
+            {/* Manual fixings & overrides card */}
             <div className="rounded-2xl border border-zinc-800 bg-zinc-950/80 p-4 space-y-4">
               <div className="flex items-center justify-between gap-3">
                 <div>
@@ -852,7 +973,7 @@ export default function CentralBankDashboardPage() {
                 </div>
                 <button
                   type="button"
-                  onClick={() => setShowForm(true)}
+                  onClick={startCreateNew}
                   className="rounded-full bg-emerald-500 px-3 py-1.5 text-[0.75rem] font-medium text-black hover:bg-emerald-400"
                 >
                   + Add manual fixing
@@ -861,9 +982,22 @@ export default function CentralBankDashboardPage() {
 
               {showForm && (
                 <form
-                  onSubmit={handleCreateManualFixing}
+                  onSubmit={handleCreateOrUpdateManualFixing}
                   className="rounded-xl border border-zinc-800 bg-black/70 p-3 space-y-3 text-xs"
                 >
+                  <div className="flex items-center justify-between">
+                    <p className="text-[0.7rem] text-zinc-400">
+                      {editingRowId
+                        ? "Edit existing manual fixing"
+                        : "Create a new manual fixing"}
+                    </p>
+                    {editingRowId && (
+                      <span className="rounded-full bg-zinc-800 px-2 py-0.5 text-[0.65rem] text-zinc-200">
+                        Editing
+                      </span>
+                    )}
+                  </div>
+
                   <div className="grid gap-3 sm:grid-cols-2">
                     <div className="space-y-1">
                       <label className="text-[0.7rem] text-zinc-400">
@@ -959,30 +1093,44 @@ export default function CentralBankDashboardPage() {
                         if (!savingForm) {
                           setShowForm(false);
                           setFormError(null);
+                          setEditingRowId(null);
+                          resetFormToDefaults();
                         }
                       }}
                       className="text-[0.7rem] text-zinc-400 hover:text-zinc-100"
                     >
                       Cancel
                     </button>
-                    <button
-                      type="submit"
-                      disabled={savingForm}
-                      className="rounded-full bg-emerald-500 px-3 py-1.5 text-[0.75rem] font-medium text-black hover:bg-emerald-400 disabled:cursor-not-allowed disabled:opacity-70"
-                    >
-                      {savingForm ? "Saving…" : "Save fixing"}
-                    </button>
+                    <div className="flex items-center gap-2">
+                      {editingRowId && (
+                        <span className="text-[0.65rem] text-zinc-500">
+                          Editing existing row
+                        </span>
+                      )}
+                      <button
+                        type="submit"
+                        disabled={savingForm}
+                        className="rounded-full bg-emerald-500 px-3 py-1.5 text-[0.75rem] font-medium text-black hover:bg-emerald-400 disabled:cursor-not-allowed disabled:opacity-70"
+                      >
+                        {savingForm
+                          ? "Saving…"
+                          : editingRowId
+                          ? "Save changes"
+                          : "Save fixing"}
+                      </button>
+                    </div>
                   </div>
                 </form>
               )}
 
               <div className="rounded-xl border border-zinc-900 bg-black/60 overflow-hidden text-xs">
-                <div className="grid grid-cols-[1.1fr_0.7fr_0.7fr_0.7fr_0.9fr] bg-zinc-950/90 text-[0.7rem] text-zinc-400">
+                <div className="grid grid-cols-[1.1fr_0.7fr_0.7fr_0.7fr_0.9fr_0.9fr] bg-zinc-950/90 text-[0.7rem] text-zinc-400">
                   <div className="px-3 py-2">Date &amp; pair</div>
                   <div className="px-3 py-2 text-right">Mid rate</div>
                   <div className="px-3 py-2 text-right">Official</div>
                   <div className="px-3 py-2 text-right">Override</div>
                   <div className="px-3 py-2 text-right">Created by</div>
+                  <div className="px-3 py-2 text-right">Actions</div>
                 </div>
 
                 <div className="max-h-56 overflow-y-auto">
@@ -1003,7 +1151,7 @@ export default function CentralBankDashboardPage() {
                     overrides.map((row) => (
                       <div
                         key={row.id}
-                        className="grid grid-cols-[1.1fr_0.7fr_0.7fr_0.7fr_0.9fr] border-t border-zinc-900/80 px-3 py-2"
+                        className="grid grid-cols-[1.1fr_0.7fr_0.7fr_0.7fr_0.9fr_0.9fr] border-t border-zinc-900/80 px-3 py-2"
                       >
                         <div>
                           <p className="text-zinc-100">{row.as_of_date}</p>
@@ -1037,6 +1185,22 @@ export default function CentralBankDashboardPage() {
                         <div className="text-right text-[0.7rem] text-zinc-500">
                           {row.created_email ?? "—"}
                         </div>
+                        <div className="flex items-center justify-end gap-2 text-[0.7rem]">
+                          <button
+                            type="button"
+                            onClick={() => startEditRow(row)}
+                            className="text-emerald-400 hover:text-emerald-300"
+                          >
+                            Edit
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => handleDeleteRow(row)}
+                            className="text-red-400 hover:text-red-300"
+                          >
+                            Delete
+                          </button>
+                        </div>
                       </div>
                     ))
                   )}
@@ -1053,6 +1217,7 @@ export default function CentralBankDashboardPage() {
               </p>
             </div>
 
+            {/* Data export card */}
             <div className="rounded-2xl border border-zinc-800 bg-zinc-950/80 p-4 space-y-3">
               <div className="flex items-center justify-between gap-3">
                 <div>
@@ -1104,6 +1269,7 @@ export default function CentralBankDashboardPage() {
             </div>
           </div>
 
+          {/* Right column: analytics + fixing schedule */}
           <div className="space-y-6">
             <AdminAnalyticsPanel overrides={overrides} />
 
