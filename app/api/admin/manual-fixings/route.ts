@@ -39,9 +39,10 @@ export async function GET(req: NextRequest) {
   const base = search.get("base");
   const quote = search.get("quote");
 
-  let query = supabase.from("manual_fixings").select(SELECT_COLUMNS).order("as_of_date", {
-    ascending: false,
-  });
+  let query = supabase
+    .from("manual_fixings")
+    .select(SELECT_COLUMNS)
+    .order("as_of_date", { ascending: false });
 
   if (base) query = query.eq("base_currency", base);
   if (quote) query = query.eq("quote_currency", quote);
@@ -66,7 +67,7 @@ export async function POST(req: NextRequest) {
 
   let body: ManualFixingPayload;
   try {
-    body = await req.json();
+    body = (await req.json()) as ManualFixingPayload;
   } catch {
     return NextResponse.json({ error: "Invalid JSON body." }, { status: 400 });
   }
@@ -83,7 +84,7 @@ export async function POST(req: NextRequest) {
     );
   }
 
-  const insertPayload: any = {
+  const insertPayload: Record<string, unknown> = {
     as_of_date: body.as_of_date,
     base_currency: body.base_currency,
     quote_currency: body.quote_currency,
@@ -117,16 +118,19 @@ export async function PUT(req: NextRequest) {
 
   let body: ManualFixingPayload;
   try {
-    body = await req.json();
+    body = (await req.json()) as ManualFixingPayload;
   } catch {
     return NextResponse.json({ error: "Invalid JSON body." }, { status: 400 });
   }
 
   if (!body.id) {
-    return NextResponse.json({ error: "Missing id for update." }, { status: 400 });
+    return NextResponse.json(
+      { error: "Missing id for update." },
+      { status: 400 }
+    );
   }
 
-  const updatePayload: any = {
+  const updatePayload: Record<string, unknown> = {
     as_of_date: body.as_of_date,
     base_currency: body.base_currency,
     quote_currency: body.quote_currency,
@@ -161,13 +165,18 @@ export async function DELETE(req: NextRequest) {
   const id = url.searchParams.get("id");
 
   if (!id) {
-    return NextResponse.json({ error: "Missing id for delete." }, { status: 400 });
+    return NextResponse.json(
+      { error: "Missing id for delete." },
+      { status: 400 }
+    );
   }
 
-  const { error } = await supabase
+  // IMPORTANT: treat "0 rows deleted" as an error
+  const { data, error } = await supabase
     .from("manual_fixings")
     .delete()
-    .eq("id", id);
+    .eq("id", id)
+    .select("id");
 
   if (error) {
     console.error("DELETE manual_fixings error:", error);
@@ -177,5 +186,16 @@ export async function DELETE(req: NextRequest) {
     );
   }
 
-  return NextResponse.json({ success: true });
+  if (!data || data.length === 0) {
+    console.warn(
+      "DELETE manual_fixings: no row found with id:",
+      id
+    );
+    return NextResponse.json(
+      { error: "Manual fixing not found." },
+      { status: 404 }
+    );
+  }
+
+  return NextResponse.json({ success: true, deleted: data[0].id });
 }
