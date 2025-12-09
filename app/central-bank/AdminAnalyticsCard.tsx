@@ -37,7 +37,7 @@ type OverridePoint = {
 };
 
 type AnchorHistoryResponse = {
-  pair: string;
+  pair: string; // e.g. "SSPUSD"
   window: WindowKey;
   history: HistoryPoint[];
   overrides: OverridePoint[];
@@ -59,7 +59,9 @@ const PAIR_OPTIONS = [
   { key: "SSPTZS", label: "SSP / TZS" },
 ] as const;
 
-const DEFAULT_PAIR = "SSPUSD";
+type PairKey = (typeof PAIR_OPTIONS)[number]["key"];
+
+const DEFAULT_PAIR: PairKey = "SSPUSD";
 
 const chartOptions: ChartOptions<"line"> = {
   responsive: true,
@@ -112,8 +114,9 @@ const chartOptions: ChartOptions<"line"> = {
 };
 
 export default function AdminAnalyticsCard() {
-  const [windowKey, setWindowKey] = useState<WindowKey>("365d");
-  const [pairKey, setPairKey] = useState<string>(DEFAULT_PAIR);
+  // Default window = "all" so we request full available history on first load
+  const [windowKey, setWindowKey] = useState<WindowKey>("all");
+  const [pairKey, setPairKey] = useState<PairKey>(DEFAULT_PAIR);
   const [data, setData] = useState<AnchorHistoryResponse | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -132,9 +135,12 @@ export default function AdminAnalyticsCard() {
           window: windowKey,
         });
 
-        const res = await fetch(`/api/admin/anchor-history?${params.toString()}`, {
-          cache: "no-store",
-        });
+        const res = await fetch(
+          `/api/admin/anchor-history?${params.toString()}`,
+          {
+            cache: "no-store",
+          },
+        );
 
         if (!res.ok) {
           const body = await res.json().catch(() => ({}));
@@ -226,7 +232,10 @@ export default function AdminAnalyticsCard() {
             Volatility and anchor-pair history using live engine data.
           </h2>
           <p className="text-[11px] text-zinc-500">
-            Viewing {windowKey === "all" ? "full available history" : `last ${windowKey}`}.
+            Viewing{" "}
+            {windowKey === "all"
+              ? "full available history."
+              : `last ${windowKey}.`}
           </p>
         </div>
 
@@ -300,9 +309,9 @@ export default function AdminAnalyticsCard() {
         In this window, the system has{" "}
         <span className="font-semibold text-zinc-300">{overrideCount}</span>{" "}
         manual {activePairLabel} overrides captured in{" "}
-        <span className="font-mono text-zinc-400">manual_fixings</span>. Days with
-        overrides are highlighted as amber markers on the chart so you can see
-        where policy actions intersect with market moves.
+        <span className="font-mono text-zinc-400">manual_fixings</span>. Days
+        with overrides are highlighted as amber markers on the chart so you can
+        see where policy actions intersect with market moves.
       </p>
     </section>
   );
