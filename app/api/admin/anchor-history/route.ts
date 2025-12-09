@@ -9,6 +9,41 @@ const WINDOW_TO_DAYS: Record<Exclude<WindowKey, "all">, number> = {
   "365d": 365,
 };
 
+/**
+ * Resolve a pair string into the actual base / quote used in fx_daily_rates_default.
+ *
+ * Rules:
+ * - Strip "/" and uppercase the value.
+ * - If either side is SSP, SSP is always the base currency.
+ * - Otherwise, assume first 3 chars = base, last 3 chars = quote.
+ * - On malformed input, fall back to SSP / USD (engine anchor).
+ */
+function resolvePair(pairParam: string): { base_currency: string; quote_currency: string } {
+  const clean = pairParam.replace("/", "").toUpperCase();
+
+  if (clean.length !== 6) {
+    // Fallback: anchor orientation used by the engine
+    return { base_currency: "SSP", quote_currency: "USD" };
+  }
+
+  const a = clean.slice(0, 3);
+  const b = clean.slice(3);
+
+  // If SSP appears on either side, it is always the base in the engine
+  if (a === "SSP" || b === "SSP") {
+    return {
+      base_currency: "SSP",
+      quote_currency: a === "SSP" ? b : a,
+    };
+  }
+
+  // Generic non-SSP pair (kept for future flexibility)
+  return {
+    base_currency: a,
+    quote_currency: b,
+  };
+}
+
 export async function GET(req: NextRequest) {
   try {
     // IMPORTANT: supabaseServer is already a client, DO NOT CALL IT
@@ -20,15 +55,14 @@ export async function GET(req: NextRequest) {
     const url = new URL(req.url);
     const searchParams = url.searchParams;
 
-    const pairParam = searchParams.get("pair") || "USDSSP";
-    const windowParam = (searchParams.get("window") || "365d").toLowerCase() as WindowKey;
+    const pairParamRaw = searchParams.get("pair") || "USDSSP";
+    const windowParamRaw = (searchParams.get("window") || "365d").toLowerCase();
 
-    if (!WINDOW_OPTIONS.includes(windowParam)) {
-      return NextResponse.json({ error: "Invalid window value." }, { status: 400 });
-    }
+    const windowParam: WindowKey = WINDOW_OPTIONS.includes(windowParamRaw as WindowKey)
+      ? (windowParamRaw as WindowKey)
+      : "365d";
 
-    const base_currency = pairParam.slice(0, 3);
-    const quote_currency = pairParam.slice(3);
+    const { base_currency, quote_currency } = resolvePair(pairParamRaw);
 
     // ============================
     // 2. Date window
@@ -36,7 +70,7 @@ export async function GET(req: NextRequest) {
     let sinceDate: string | null = null;
 
     if (windowParam !== "all") {
-      const days = WINDOW_TO_DAYS[windowParam as Exclude<WindowKey, "all">];
+      const days = WINDOW_TO_DAYS[windowParam];
       const since = new Date();
       since.setDate(since.getDate() - days);
       sinceDate = since.toISOString().slice(0, 10); // YYYY-MM-DD
@@ -114,7 +148,7 @@ export async function GET(req: NextRequest) {
     }));
 
     return NextResponse.json({
-      pair: pairParam,
+      pair: pairParamRaw,
       window: windowParam,
       history,
       overrides: overrideMarkers,
