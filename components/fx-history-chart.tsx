@@ -5,7 +5,7 @@ import { useEffect, useMemo, useState } from "react";
 type HistoryPoint = { date: string; mid: number };
 
 type Series = {
-  label: string; // "30d", "90d", "365d" or "90d"/"365d"/"all" in fetch mode
+  label: string; // e.g. "30d", "90d", "365d"
   days: number;
   points: HistoryPoint[];
 };
@@ -39,6 +39,8 @@ type AnchorHistoryResponse = {
 
 export default function FxHistoryChart(props: Props) {
   const isSeriesMode = "series" in props && props.series !== undefined;
+  const isFetchMode = !isSeriesMode;
+  const variant: "full" | "compact" = isFetchMode ? "compact" : "full";
 
   const [fetchedSeries, setFetchedSeries] = useState<Series[] | null>(null);
   const [loading, setLoading] = useState(false);
@@ -47,7 +49,7 @@ export default function FxHistoryChart(props: Props) {
     isSeriesMode && props.series.length > 0 ? props.series[0].label : ""
   );
 
-  // Fetch branch for base/quote/window mode
+  // Fetch branch for base/quote/window mode (used by EAMU cards)
   useEffect(() => {
     if (isSeriesMode) {
       setFetchedSeries(null);
@@ -59,7 +61,6 @@ export default function FxHistoryChart(props: Props) {
     }
 
     const { base, quote, window } = props as FetchProps;
-
     if (!base || !quote || !window) return;
 
     setLoading(true);
@@ -115,25 +116,123 @@ export default function FxHistoryChart(props: Props) {
     return series.find((s) => s.label === activeLabel) ?? series[0];
   }, [activeLabel, series]);
 
-  if (loading && series.length === 0) {
+  // -------------------------------
+  // COMPACT MODE (cards)
+  // -------------------------------
+  if (variant === "compact") {
+    // If loading, error, or not enough points → neutral placeholder bar
+    if (
+      loading ||
+      fetchError ||
+      !activeSeries ||
+      !activeSeries.points ||
+      activeSeries.points.length < 2
+    ) {
+      return <div className="w-full h-full bg-neutral-900/60" />;
+    }
+
+    const points = activeSeries.points;
+    const mids = points.map((p) => p.mid);
+    const min = Math.min(...mids);
+    const max = Math.max(...mids);
+    const range = max - min || 1;
+
+    const width = 260;
+    const height = 32; // slightly taller for smoother curve in cards
+    const paddingX = 4;
+    const paddingY = 6;
+    const innerWidth = width - paddingX * 2;
+    const innerHeight = height - paddingY * 2;
+
+    const stepX =
+      points.length > 1 ? innerWidth / (points.length - 1) : innerWidth;
+
+    const svgPoints = points.map((p, index) => {
+      const x = paddingX + index * stepX;
+      const normalized = (p.mid - min) / range;
+      const y = paddingY + innerHeight - normalized * innerHeight;
+      return { x, y };
+    });
+
+    const pathData = svgPoints
+      .map((pt, idx) => `${idx === 0 ? "M" : "L"} ${pt.x} ${pt.y}`)
+      .join(" ");
+
     return (
-      <div className="mt-2 rounded-xl border border-zinc-900 bg-zinc-950 px-3 py-2 text-[0.75rem] text-zinc-500">
-        Loading history…
-      </div>
+      <svg
+        viewBox={`0 0 ${width} ${height}`}
+        className="w-full h-full"
+        aria-hidden="true"
+      >
+        <defs>
+          <linearGradient
+            id="fxCardAreaGradient"
+            x1="0"
+            y1="0"
+            x2="0"
+            y2="1"
+          >
+            <stop offset="0%" stopColor="#fafafa" stopOpacity="0.25" />
+            <stop offset="100%" stopColor="#18181b" stopOpacity="0" />
+          </linearGradient>
+        </defs>
+
+        {/* Area fill */}
+        <path
+          d={
+            pathData +
+            ` L ${svgPoints[svgPoints.length - 1].x} ${height - paddingY}` +
+            ` L ${svgPoints[0].x} ${height - paddingY} Z`
+          }
+          fill="url(#fxCardAreaGradient)"
+          stroke="none"
+        />
+
+        {/* Line */}
+        <path
+          d={pathData}
+          fill="none"
+          stroke="#f4f4f5"
+          strokeWidth={1.4}
+          strokeLinecap="round"
+        />
+
+        {/* Last point */}
+        {svgPoints.length > 0 && (
+          <circle
+            cx={svgPoints[svgPoints.length - 1].x}
+            cy={svgPoints[svgPoints.length - 1].y}
+            r={2}
+            fill="#fafafa"
+          />
+        )}
+      </svg>
     );
   }
 
-  if (fetchError && series.length === 0) {
-    return (
-      <div className="mt-2 rounded-xl border border-zinc-900 bg-zinc-950 px-3 py-2 text-[0.75rem] text-red-400">
-        {fetchError}
-      </div>
-    );
-  }
+  // -------------------------------
+  // FULL MODE (hero chart)
+  // -------------------------------
 
   if (!activeSeries || !activeSeries.points || activeSeries.points.length < 2) {
+    if (loading && series.length === 0) {
+      return (
+        <div className="mt-3 rounded-xl border border-zinc-900 bg-zinc-950 px-3 py-2 text-[0.75rem] text-zinc-500">
+          Loading history…
+        </div>
+      );
+    }
+
+    if (fetchError && series.length === 0) {
+      return (
+        <div className="mt-3 rounded-xl border border-zinc-900 bg-zinc-950 px-3 py-2 text-[0.75rem] text-zinc-500">
+          History not available yet for this window.
+        </div>
+      );
+    }
+
     return (
-      <div className="mt-2 rounded-xl border border-zinc-900 bg-zinc-950 px-3 py-2 text-[0.75rem] text-zinc-500">
+      <div className="mt-3 rounded-xl border border-zinc-900 bg-zinc-950 px-3 py-2 text-[0.75rem] text-zinc-500">
         Not enough historical data to render chart yet.
       </div>
     );
@@ -144,8 +243,6 @@ export default function FxHistoryChart(props: Props) {
   const mids = points.map((p) => p.mid);
   const min = Math.min(...mids);
   const max = Math.max(...mids);
-
-  // Avoid flat line if all values identical
   const range = max - min || 1;
 
   const width = 260;
@@ -172,9 +269,63 @@ export default function FxHistoryChart(props: Props) {
   const firstDate = points[0]?.date ?? "";
   const lastDate = points[points.length - 1]?.date ?? "";
 
+  const chartSvg = (
+    <svg
+      viewBox={`0 0 ${width} ${height}`}
+      className="w-full"
+      aria-hidden="true"
+    >
+      {/* Background mid-line */}
+      <line
+        x1={paddingX}
+        y1={height / 2}
+        x2={width - paddingX}
+        y2={height / 2}
+        stroke="#27272a"
+        strokeWidth={0.5}
+      />
+
+      {/* Area fill */}
+      <path
+        d={
+          pathData +
+          ` L ${svgPoints[svgPoints.length - 1].x} ${height - paddingY}` +
+          ` L ${svgPoints[0].x} ${height - paddingY} Z`
+        }
+        fill="url(#fxAreaGradient)"
+        stroke="none"
+      />
+
+      {/* Line */}
+      <path
+        d={pathData}
+        fill="none"
+        stroke="#fafafa"
+        strokeWidth={1.4}
+        strokeLinecap="round"
+      />
+
+      {/* Last point */}
+      {svgPoints.length > 0 && (
+        <circle
+          cx={svgPoints[svgPoints.length - 1].x}
+          cy={svgPoints[svgPoints.length - 1].y}
+          r={2}
+          fill="#fafafa"
+        />
+      )}
+
+      <defs>
+        <linearGradient id="fxAreaGradient" x1="0" y1="0" x2="0" y2="1">
+          <stop offset="0%" stopColor="#fafafa" stopOpacity="0.22" />
+          <stop offset="100%" stopColor="#18181b" stopOpacity="0" />
+        </linearGradient>
+      </defs>
+    </svg>
+  );
+
   return (
     <div className="mt-3 space-y-2">
-      {/* Header + toggle (only meaningful in series mode with >1 entries) */}
       {series.length > 1 && (
         <div className="flex items-center justify-between gap-2 text-[0.7rem]">
           <p className="text-zinc-400">USD/SSP history</p>
@@ -201,64 +352,8 @@ export default function FxHistoryChart(props: Props) {
         </div>
       )}
 
-      {/* Chart */}
-      <div className="rounded-xl border border-zinc-900 bg-zinc-950 px-3 py-2">
-        <svg
-          viewBox={`0 0 ${width} ${height}`}
-          className="w-full"
-          aria-hidden="true"
-        >
-          {/* Background line */}
-          <line
-            x1={paddingX}
-            y1={height / 2}
-            x2={width - paddingX}
-            y2={height / 2}
-            stroke="#27272a"
-            strokeWidth={0.5}
-          />
-          {/* Area fill */}
-          <path
-            d={
-              pathData +
-              ` L ${svgPoints[svgPoints.length - 1].x} ${height - paddingY}` +
-              ` L ${svgPoints[0].x} ${height - paddingY} Z`
-            }
-            fill="url(#fxAreaGradient)"
-            stroke="none"
-          />
-          {/* Line */}
-          <path
-            d={pathData}
-            fill="none"
-            stroke="#fafafa"
-            strokeWidth={1.4}
-            strokeLinecap="round"
-          />
-          {/* Last point */}
-          {svgPoints.length > 0 && (
-            <circle
-              cx={svgPoints[svgPoints.length - 1].x}
-              cy={svgPoints[svgPoints.length - 1].y}
-              r={2}
-              fill="#fafafa"
-            />
-          )}
-
-          <defs>
-            <linearGradient
-              id="fxAreaGradient"
-              x1="0"
-              y1="0"
-              x2="0"
-              y2="1"
-            >
-              <stop offset="0%" stopColor="#fafafa" stopOpacity="0.22" />
-              <stop offset="100%" stopColor="#18181b" stopOpacity="0" />
-            </linearGradient>
-          </defs>
-        </svg>
-
+      <div className="rounded-2xl border border-zinc-900 bg-zinc-950 px-3 py-2">
+        {chartSvg}
         <div className="mt-1 flex items-center justify-between text-[0.6rem] text-zinc-500">
           <span>{firstDate}</span>
           <span className="text-zinc-400">
