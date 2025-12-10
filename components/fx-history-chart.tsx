@@ -49,9 +49,13 @@ export default function FxHistoryChart(props: Props) {
     isSeriesMode && props.series.length > 0 ? props.series[0].label : ""
   );
 
-  // Tooltip state for compact sparklines
+  // Tooltip state for compact sparklines (cards)
   const [hoverIndex, setHoverIndex] = useState<number | null>(null);
   const svgRef = useRef<SVGSVGElement | null>(null);
+
+  // Tooltip state for full chart (modal)
+  const [fullHoverIndex, setFullHoverIndex] = useState<number | null>(null);
+  const fullSvgRef = useRef<SVGSVGElement | null>(null);
 
   // Fetch branch for base/quote/window mode (used by EAMU cards)
   useEffect(() => {
@@ -173,7 +177,7 @@ export default function FxHistoryChart(props: Props) {
       .map((pt, idx) => `${idx === 0 ? "M" : "L"} ${pt.x} ${pt.y}`)
       .join(" ");
 
-    // Tooltip logic
+    // Tooltip logic (compact)
     const handleMouseMove = (event: React.MouseEvent<SVGSVGElement>) => {
       if (!svgRef.current) return;
       const rect = svgRef.current.getBoundingClientRect();
@@ -197,12 +201,14 @@ export default function FxHistoryChart(props: Props) {
 
     return (
       <div className="relative h-full w-full">
-        {/* Tooltip pill */}
+        {/* Tooltip pill - brighter & more visible */}
         {hoveredPoint && (
-          <div className="pointer-events-none absolute -top-6 left-1/2 -translate-x-1/2 rounded-full bg-black/80 px-2 py-0.5 text-[0.6rem] text-zinc-100 shadow-lg ring-1 ring-zinc-800/80">
-            <span>{hoveredPoint.date}</span>
+          <div className="pointer-events-none absolute -top-8 left-1/2 -translate-x-1/2 rounded-full bg-black px-3 py-1 text-[0.7rem] font-medium text-zinc-100 shadow-xl ring-1 ring-zinc-700/80">
+            <span className="tabular-nums">{hoveredPoint.date}</span>
             <span className="mx-1 text-zinc-500">•</span>
-            <span>{hoveredPoint.mid.toFixed(3)}</span>
+            <span className="tabular-nums">
+              {hoveredPoint.mid.toFixed(3)}
+            </span>
           </div>
         )}
 
@@ -264,7 +270,7 @@ export default function FxHistoryChart(props: Props) {
   }
 
   // -------------------------------
-  // FULL MODE (hero chart)
+  // FULL MODE (hero chart in modal)
   // -------------------------------
 
   if (!activeSeries || !activeSeries.points || activeSeries.points.length < 2) {
@@ -328,62 +334,29 @@ export default function FxHistoryChart(props: Props) {
   const firstDate = points[0]?.date ?? "";
   const lastDate = points[points.length - 1]?.date ?? "";
 
-  const chartSvg = (
-    <svg
-      viewBox={`0 0 ${width} ${height}`}
-      className="w-full"
-      aria-hidden="true"
-    >
-      {/* Background mid-line */}
-      <line
-        x1={paddingX}
-        y1={height / 2}
-        x2={width - paddingX}
-        y2={height / 2}
-        stroke="#27272a"
-        strokeWidth={0.5}
-      />
+  // Tooltip logic (full modal chart)
+  const handleFullMouseMove = (event: React.MouseEvent<SVGSVGElement>) => {
+    if (!fullSvgRef.current) return;
+    const rect = fullSvgRef.current.getBoundingClientRect();
+    const localX = event.clientX - rect.left - paddingX;
+    const clampedX = Math.max(0, Math.min(innerWidth, localX));
+    const approxIndex =
+      points.length > 1 ? Math.round(clampedX / stepX) : 0;
+    const safeIndex = Math.max(
+      0,
+      Math.min(points.length - 1, approxIndex)
+    );
+    setFullHoverIndex(safeIndex);
+  };
 
-      {/* Area fill */}
-      <path
-        d={
-          pathData +
-          ` L ${svgPoints[svgPoints.length - 1].x} ${
-            height - paddingY
-          }` +
-          ` L ${svgPoints[0].x} ${height - paddingY} Z`
-        }
-        fill="url(#fxAreaGradient)"
-        stroke="none"
-      />
+  const handleFullMouseLeave = () => {
+    setFullHoverIndex(null);
+  };
 
-      {/* Line */}
-      <path
-        d={pathData}
-        fill="none"
-        stroke="#fafafa"
-        strokeWidth={1.4}
-        strokeLinecap="round"
-      />
-
-      {/* Last point */}
-      {svgPoints.length > 0 && (
-        <circle
-          cx={svgPoints[svgPoints.length - 1].x}
-          cy={svgPoints[svgPoints.length - 1].y}
-          r={2}
-          fill="#fafafa"
-        />
-      )}
-
-      <defs>
-        <linearGradient id="fxAreaGradient" x1="0" y1="0" x2="0" y2="1">
-          <stop offset="0%" stopColor="#fafafa" stopOpacity="0.22" />
-          <stop offset="100%" stopColor="#18181b" stopOpacity="0" />
-        </linearGradient>
-      </defs>
-    </svg>
-  );
+  const hoveredFullPoint =
+    fullHoverIndex != null ? points[fullHoverIndex] : null;
+  const hoveredFullSvgPoint =
+    fullHoverIndex != null ? svgPoints[fullHoverIndex] : null;
 
   return (
     <div className="mt-3 space-y-2">
@@ -397,7 +370,10 @@ export default function FxHistoryChart(props: Props) {
                 <button
                   key={s.label}
                   type="button"
-                  onClick={() => setActiveLabel(s.label)}
+                  onClick={() => {
+                    setActiveLabel(s.label);
+                    setFullHoverIndex(null);
+                  }}
                   className={
                     "rounded-full px-2 py-0.5 text-[0.65rem] transition " +
                     (isActive
@@ -413,8 +389,102 @@ export default function FxHistoryChart(props: Props) {
         </div>
       )}
 
-      <div className="rounded-2xl border border-zinc-900 bg-zinc-950 px-3 py-2">
-        {chartSvg}
+      <div className="relative rounded-2xl border border-zinc-900 bg-zinc-950 px-3 py-2">
+        {/* Tooltip pill for full chart */}
+        {hoveredFullPoint && hoveredFullSvgPoint && (
+          <div
+            className="pointer-events-none absolute -top-8 flex -translate-x-1/2 items-center gap-1 rounded-full bg-black px-3 py-1 text-[0.7rem] font-medium text-zinc-100 shadow-xl ring-1 ring-zinc-700/80"
+            style={{
+              left: `${(hoveredFullSvgPoint.x / width) * 100}%`,
+            }}
+          >
+            <span className="tabular-nums">{hoveredFullPoint.date}</span>
+            <span className="mx-1 text-zinc-500">•</span>
+            <span className="tabular-nums">
+              {hoveredFullPoint.mid.toFixed(3)}
+            </span>
+          </div>
+        )}
+
+        <svg
+          ref={fullSvgRef}
+          viewBox={`0 0 ${width} ${height}`}
+          className="w-full"
+          aria-hidden="true"
+          onMouseMove={handleFullMouseMove}
+          onMouseLeave={handleFullMouseLeave}
+        >
+          {/* Background mid-line */}
+          <line
+            x1={paddingX}
+            y1={height / 2}
+            x2={width - paddingX}
+            y2={height / 2}
+            stroke="#27272a"
+            strokeWidth={0.5}
+          />
+
+          {/* Area fill */}
+          <path
+            d={
+              pathData +
+              ` L ${svgPoints[svgPoints.length - 1].x} ${
+                height - paddingY
+              }` +
+              ` L ${svgPoints[0].x} ${height - paddingY} Z`
+            }
+            fill="url(#fxAreaGradient)"
+            stroke="none"
+          />
+
+          {/* Line */}
+          <path
+            d={pathData}
+            fill="none"
+            stroke="#fafafa"
+            strokeWidth={1.4}
+            strokeLinecap="round"
+          />
+
+          {/* Hover crosshair + point */}
+          {hoveredFullSvgPoint && (
+            <>
+              <line
+                x1={hoveredFullSvgPoint.x}
+                y1={paddingY}
+                x2={hoveredFullSvgPoint.x}
+                y2={height - paddingY}
+                stroke="#52525b"
+                strokeWidth={0.7}
+                strokeDasharray="2 2"
+              />
+              <circle
+                cx={hoveredFullSvgPoint.x}
+                cy={hoveredFullSvgPoint.y}
+                r={2.5}
+                fill="#f97316"
+              />
+            </>
+          )}
+
+          {/* Last point marker */}
+          {svgPoints.length > 0 && (
+            <circle
+              cx={svgPoints[svgPoints.length - 1].x}
+              cy={svgPoints[svgPoints.length - 1].y}
+              r={2}
+              fill="#fafafa"
+            />
+          )}
+
+          <defs>
+            <linearGradient id="fxAreaGradient" x1="0" y1="0" x2="0" y2="1">
+              <stop offset="0%" stopColor="#fafafa" stopOpacity="0.22" />
+              <stop offset="100%" stopColor="#18181b" stopOpacity="0" />
+            </linearGradient>
+          </defs>
+        </svg>
+
         <div className="mt-1 flex items-center justify-between text-[0.6rem] text-zinc-500">
           <span>{firstDate}</span>
           <span className="text-zinc-400">
