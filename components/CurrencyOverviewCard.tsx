@@ -153,7 +153,8 @@ export function CurrencyOverviewCard({
             </p>
           </div>
 
-          <div className="grid gap-3 sm:grid-cols-2 2xl:grid-cols-3 items-stretch">
+          {/* Always 2 cards per row on desktop to avoid overlap */}
+          <div className="grid gap-3 sm:grid-cols-2 items-stretch">
             {eamuRates.map((country) => {
               const changePct =
                 typeof country.changePct === "number"
