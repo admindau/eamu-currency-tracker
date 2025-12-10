@@ -165,8 +165,9 @@ export function CurrencyOverviewCard({
               return (
                 <article
                   key={country.code}
-                  className="flex h-full flex-col justify-between rounded-xl border border-zinc-900 bg-zinc-950/80 p-3 shadow-[0_0_24px_rgba(0,0,0,0.6)]"
+                  className="flex h-full flex-col justify-between rounded-xl border border-zinc-900 bg-zinc-950/80 p-3 shadow-[0_0_24px_rgba(0,0,0,0.6)] transition-transform transition-colors duration-150 ease-out hover:-translate-y-px hover:border-zinc-600 hover:bg-zinc-950 hover:shadow-[0_0_28px_rgba(0,0,0,0.7)]"
                 >
+
                   {/* Top: flag + pair + mid */}
                   <header className="flex items-start justify-between gap-2">
                     <div className="flex items-center gap-2">
