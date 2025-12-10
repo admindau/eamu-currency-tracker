@@ -1,0 +1,15 @@
+insert into fx_daily_rates (
+  as_of_date,
+  base_currency,
+  quote_currency,
+  rate_mid,
+  source_id,
+  is_official,
+  is_manual_override
+)
+values
+  ('2025-12-10', 'SSP', 'UGX', 1.2890, 1, true, false),
+  ('2025-12-10', 'SSP', 'TZS', 1.8589, 1, true, false),
+  ('2025-12-10', 'SSP', 'RWF', 3.1281, 1, true, false),
+  ('2025-12-10', 'SSP', 'BIF', 1.5347, 1, true, false);
+  
