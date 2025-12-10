@@ -592,25 +592,26 @@ export default async function HomePage() {
 
           {/* Slim commentary (380px) + wide EAMU cards */}
           <div className="grid gap-4 md:grid-cols-[380px_minmax(0,1.6fr)] items-start">
-            {/* Anchor + commentary */}
-            <div className="rounded-xl border border-zinc-800 bg-zinc-950/70 p-3 text-[0.7rem] space-y-2">
-              <div>
-                <p className="text-[0.62rem] uppercase tracking-[0.2em] text-zinc-500">
-                  Anchor commentary (beta)
-                </p>
-                <p className="text-xs font-medium text-zinc-100">
-                  USD/SSP daily note
-                </p>
-              </div>
-              <p className="text-[0.68rem] leading-relaxed text-zinc-300">
-                {commentary}
-              </p>
-              <p className="text-[0.62rem] text-zinc-500">
-                This paragraph is generated algorithmically from the same fixing
-                history used by Savvy Rilla FX. Treat it as a starting point for
-                human analysis, not as investment advice.
-              </p>
-            </div>
+      {/* Anchor + commentary (ultra-compact) */}
+      <div className="rounded-xl border border-zinc-900 bg-zinc-950/60 p-2 text-[0.65rem] space-y-1 max-h-[160px] overflow-hidden">
+        <div>
+          <p className="text-[0.55rem] uppercase tracking-[0.18em] text-zinc-500">
+            Anchor commentary (beta)
+         </p>
+        <p className="text-[0.68rem] font-medium text-zinc-200 leading-tight">
+        USD/SSP daily note
+    </p>
+  </div>
+
+  <p className="text-[0.63rem] leading-snug text-zinc-300 line-clamp-4">
+    {commentary}
+  </p>
+
+  <p className="text-[0.56rem] text-zinc-600">
+    Auto-generated from daily fixing data.
+  </p>
+</div>
+
 
             {/* Members grid extracted to component */}
             <CurrencyOverviewCard
