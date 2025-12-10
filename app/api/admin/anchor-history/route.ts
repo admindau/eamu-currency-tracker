@@ -11,104 +11,136 @@ const WINDOW_TO_DAYS: Record<Exclude<WindowKey, "all">, number> = {
 
 const DEFAULT_PAIR = "SSPUSD";
 
+type FxDailyRow = {
+  as_of_date: string;
+  rate_mid: number | null;
+};
+
+type ManualFixingRow = {
+  as_of_date: string;
+  rate_mid: number | null;
+};
+
+type HistoryPoint = {
+  date: string; // YYYY-MM-DD
+  mid: number;
+};
+
+type OverridePoint = HistoryPoint;
+
+function dateToString(d: Date): string {
+  // Always UTC; we only care about the calendar date.
+  return d.toISOString().slice(0, 10);
+}
+
 export async function GET(req: NextRequest) {
   try {
-    // supabaseServer is already a client
     const supabase = supabaseServer;
-
     const { searchParams } = new URL(req.url);
-    const rawWindow = (searchParams.get("window") ?? "365d") as string;
-    const rawPair = (searchParams.get("pair") ?? DEFAULT_PAIR) as string;
 
-    const windowParam: WindowKey = (["90d", "365d", "all"] as WindowKey[]).includes(
-      rawWindow as WindowKey,
-    )
-      ? (rawWindow as WindowKey)
-      : "365d";
+    // -----------------------------------------------------------------------
+    // Pair handling
+    // -----------------------------------------------------------------------
+    const pairParamRaw = (searchParams.get("pair") ?? DEFAULT_PAIR).toUpperCase();
+    const pairSanitised = pairParamRaw.replace(/[^A-Z]/g, "");
+    const pair = pairSanitised.length === 6 ? pairSanitised : DEFAULT_PAIR;
 
-    // Expect something like SSPUSD, SSPKES, etc.
-    const safePair =
-      /^[A-Z]{6}$/.test(rawPair) && rawPair.startsWith("SSP")
-        ? rawPair
-        : DEFAULT_PAIR;
+    const baseCurrency = pair.slice(0, 3); // SSP
+    const quoteCurrency = pair.slice(3);   // USD
 
-    const baseCurrency = safePair.slice(0, 3); // "SSP"
-    const quoteCurrency = safePair.slice(3);   // "USD", "KES", etc.
+    // -----------------------------------------------------------------------
+    // Window handling
+    // -----------------------------------------------------------------------
+    const windowRaw = (searchParams.get("window") ?? "all") as WindowKey;
+    const windowParam: WindowKey = WINDOW_OPTIONS.includes(windowRaw)
+      ? windowRaw
+      : "all";
 
-    // =====================================================
-    // 1) FULL ENGINE HISTORY (NO LIMIT, NO DATE FILTER)
-    // =====================================================
-    const { data: engineRows, error: engineError } = await supabase
+    // -----------------------------------------------------------------------
+    // Fetch FULL history from fx_daily_rates_default
+    // (no LIMIT – we want the entire history; windowing happens in code)
+    // -----------------------------------------------------------------------
+    const { data: historyRows, error: historyError } = await supabase
       .from("fx_daily_rates_default")
-      .select("as_of_date, base_currency, quote_currency, rate_mid")
+      .select("as_of_date, rate_mid")
       .eq("base_currency", baseCurrency)
       .eq("quote_currency", quoteCurrency)
       .order("as_of_date", { ascending: true });
 
-    if (engineError) {
-      console.error("anchor-history: engine query error", engineError);
+    if (historyError) {
+      console.error("anchor-history: history query failed", historyError);
       return NextResponse.json(
         { error: "Failed to load anchor history" },
         { status: 500 },
       );
     }
 
-    let history =
-      engineRows?.map((row) => ({
-        date: String(row.as_of_date),
-        mid: Number((row as any).rate_mid ?? 0),
+    const historyBase: HistoryPoint[] =
+      (historyRows as FxDailyRow[] | null)?.map((row) => ({
+        date: row.as_of_date,
+        mid: Number(row.rate_mid ?? 0),
       })) ?? [];
 
-    // Apply the 90d / 365d filter IN MEMORY only
-    if (windowParam !== "all" && history.length) {
-      const daysBack = WINDOW_TO_DAYS[windowParam];
-      const cutoff = new Date();
-      cutoff.setUTCDate(cutoff.getUTCDate() - daysBack);
-      const cutoffStr = cutoff.toISOString().slice(0, 10);
-
-      history = history.filter((p) => p.date >= cutoffStr);
+    if (historyBase.length === 0) {
+      return NextResponse.json<{
+        pair: string;
+        window: WindowKey;
+        history: HistoryPoint[];
+        overrides: OverridePoint[];
+      }>({
+        pair,
+        window: windowParam,
+        history: [],
+        overrides: [],
+      });
     }
 
-    // Defensive sort, oldest → newest
-    history.sort((a, b) => (a.date < b.date ? -1 : a.date > b.date ? 1 : 0));
+    // Ensure sorted oldest -> newest (query already does this, but keep it explicit)
+    historyBase.sort((a, b) =>
+      a.date < b.date ? -1 : a.date > b.date ? 1 : 0,
+    );
 
-    // =====================================================
-    // 2) MANUAL OVERRIDES (ALSO FULL RANGE, THEN WINDOWED)
-    // =====================================================
-    const { data: manualRows, error: manualError } = await supabase
+    // -----------------------------------------------------------------------
+    // Apply window on the server side, anchored to the latest fixing date
+    // (the client will *also* window, but this keeps the payload tight if used
+    //  elsewhere with 90d / 365d directly).
+    // -----------------------------------------------------------------------
+    let history = historyBase;
+    if (windowParam !== "all") {
+      const daysBack = WINDOW_TO_DAYS[windowParam];
+      const latestDateStr = historyBase[historyBase.length - 1]!.date;
+      const latest = new Date(`${latestDateStr}T00:00:00Z`);
+
+      const cutoff = new Date(latest);
+      cutoff.setUTCDate(cutoff.getUTCDate() - daysBack);
+
+      const cutoffStr = dateToString(cutoff);
+      history = historyBase.filter((p) => p.date >= cutoffStr);
+    }
+
+    // -----------------------------------------------------------------------
+    // Fetch overrides from manual_fixings
+    // -----------------------------------------------------------------------
+    const { data: overrideRows, error: overrideError } = await supabase
       .from("manual_fixings")
-      .select("fixing_date, base_currency, quote_currency, rate_mid")
+      .select("as_of_date, rate_mid")
       .eq("base_currency", baseCurrency)
       .eq("quote_currency", quoteCurrency)
-      .order("fixing_date", { ascending: true });
+      .order("as_of_date", { ascending: true });
 
-    if (manualError) {
-      console.error("anchor-history: manual query error", manualError);
-      return NextResponse.json(
-        { error: "Failed to load overrides" },
-        { status: 500 },
-      );
+    if (overrideError) {
+      console.error("anchor-history: overrides query failed", overrideError);
+      // Do not fail the whole request – we can still show the baseline history
     }
 
-    let overrides =
-      manualRows?.map((row) => ({
-        date: String((row as any).fixing_date),
-        mid: Number((row as any).rate_mid ?? 0),
+    const overrides: OverridePoint[] =
+      (overrideRows as ManualFixingRow[] | null)?.map((row) => ({
+        date: row.as_of_date,
+        mid: Number(row.rate_mid ?? 0),
       })) ?? [];
 
-    if (windowParam !== "all" && overrides.length) {
-      const daysBack = WINDOW_TO_DAYS[windowParam];
-      const cutoff = new Date();
-      cutoff.setUTCDate(cutoff.getUTCDate() - daysBack);
-      const cutoffStr = cutoff.toISOString().slice(0, 10);
-
-      overrides = overrides.filter((p) => p.date >= cutoffStr);
-    }
-
-    overrides.sort((a, b) => (a.date < b.date ? -1 : a.date > b.date ? 1 : 0));
-
     return NextResponse.json({
-      pair: safePair,
+      pair,
       window: windowParam,
       history,
       overrides,
