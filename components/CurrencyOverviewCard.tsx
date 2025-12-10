@@ -153,7 +153,7 @@ export function CurrencyOverviewCard({
             </p>
           </div>
 
-          <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3 items-stretch">
+          <div className="grid gap-3 sm:grid-cols-2 2xl:grid-cols-3 items-stretch">
             {eamuRates.map((country) => {
               const changePct =
                 typeof country.changePct === "number"
