@@ -153,9 +153,10 @@ export function CurrencyOverviewCard({
                   key={rate.code}
                   type="button"
                   onClick={() => handleCardClick(rate.code)}
-                  whileHover={{ y: -2 }}
-                  whileTap={{ scale: 0.99 }}
-                  className="group relative text-left rounded-3xl border border-neutral-800/80 bg-gradient-to-b from-neutral-950/90 via-black to-black/90 px-4 py-3 sm:px-4 sm:py-3.5 shadow-[0_24px_80px_rgba(0,0,0,0.85)] overflow-hidden"
+                  whileHover={{ y: -4, scale: 1.02 }}
+                  whileTap={{ scale: 0.98, y: -1 }}
+                  transition={{ type: "spring", stiffness: 260, damping: 20 }}
+                  className="group relative text-left rounded-3xl border border-neutral-800/80 bg-gradient-to-b from-neutral-950/90 via-black to-black/90 px-4 py-3 sm:px-4 sm:py-3.5 shadow-[0_24px_80px_rgba(0,0,0,0.85)] overflow-hidden transition-shadow duration-200"
                 >
                   <div className="flex items-start justify-between gap-1">
                     <div>
