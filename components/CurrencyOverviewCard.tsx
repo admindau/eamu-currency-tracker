@@ -1,5 +1,4 @@
-// components/CurrencyOverviewCard.tsx
-
+// app/components/CurrencyOverviewCard.tsx
 import React from "react";
 
 type EamuRate = {
@@ -31,7 +30,7 @@ export function CurrencyOverviewCard({
             EAMU members (currency view)
           </p>
           <h2 className="text-xl font-semibold tracking-tight">
-            Regional currencies anchored on SSP
+            Regional currencies anchored on {latestBase}
           </h2>
           <p className="text-sm text-zinc-400 max-w-xl">
             Quick snapshot of East African Monetary Union member currencies,
@@ -48,10 +47,10 @@ export function CurrencyOverviewCard({
         </div>
       </div>
 
-      {/* Two-column layout: commentary + members grid */}
-      <div className="grid gap-6 lg:grid-cols-[minmax(0,1.3fr)_minmax(0,1.1fr)]">
+      {/* Two-column layout: members grid + commentary */}
+      <div className="grid gap-6 lg:grid-cols-[minmax(0,1.3fr)_minmax(0,1.05fr)]">
         {/* Left: Members grid */}
-        <section className="space-y-4 rounded-2xl border border-zinc-800 bg-zinc-950/60 p-4 sm:p-5">
+        <section className="space-y-4 rounded-2xl border border-zinc-800 bg-zinc-950/60 p-4 sm:p-5 shadow-[0_0_40px_rgba(0,0,0,0.35)]">
           <div className="flex items-center justify-between gap-2">
             <div className="space-y-1">
               <p className="text-[0.7rem] uppercase tracking-[0.25em] text-zinc-500">
@@ -72,21 +71,23 @@ export function CurrencyOverviewCard({
           ) : (
             <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
               {eamuRates.map((country) => (
-                <div
+                <article
                   key={country.code}
-                  className="flex flex-col gap-3 rounded-2xl border border-zinc-800 bg-zinc-950/70 p-4 text-sm"
+                  className="flex flex-col gap-3 rounded-2xl border border-zinc-800 bg-zinc-950/70 p-4 text-sm hover:border-zinc-700 hover:bg-zinc-900/70 transition-colors"
                 >
                   <div className="h-1 w-full rounded-full bg-gradient-to-r from-red-500 via-amber-400 to-emerald-500" />
                   <div className="flex items-center justify-between gap-2">
                     <div>
                       <p className="text-xs text-zinc-500">
-                        {country.flag} {country.name}
+                        <span className="mr-1">{country.flag}</span>
+                        {country.name}
                       </p>
                       <p className="text-sm font-semibold text-zinc-100">
                         {country.code} / {latestBase}
                       </p>
                     </div>
                   </div>
+
                   <div className="space-y-1">
                     <p className="text-[0.65rem] uppercase tracking-[0.2em] text-zinc-500">
                       Mid rate
@@ -94,6 +95,7 @@ export function CurrencyOverviewCard({
                     <p className="text-lg font-semibold">
                       {typeof country.rate === "number"
                         ? country.rate.toLocaleString("en-US", {
+                            minimumFractionDigits: 3,
                             maximumFractionDigits: 4,
                           })
                         : "—"}
@@ -102,18 +104,19 @@ export function CurrencyOverviewCard({
                       As of {latestDate ?? "—"}
                     </p>
                   </div>
+
                   <p className="mt-auto text-[0.7rem] text-zinc-500">
                     Data sourced from the same FX engine that powers the Savvy
                     Rilla FX API.
                   </p>
-                </div>
+                </article>
               ))}
             </div>
           )}
         </section>
 
         {/* Right: Commentary */}
-        <section className="flex flex-col justify-between gap-4 rounded-2xl border border-zinc-800 bg-gradient-to-b from-zinc-950/90 to-zinc-950/40 p-4 sm:p-5">
+        <section className="flex flex-col justify-between gap-4 rounded-2xl border border-zinc-800 bg-gradient-to-b from-zinc-950/90 to-zinc-950/40 p-4 sm:p-5 shadow-[0_0_40px_rgba(0,0,0,0.4)]">
           <div className="space-y-2">
             <p className="text-[0.7rem] uppercase tracking-[0.25em] text-zinc-500">
               Daily anchor commentary
@@ -122,9 +125,11 @@ export function CurrencyOverviewCard({
               USD/SSP signal for regional desks
             </h3>
           </div>
+
           <p className="text-sm leading-relaxed text-zinc-300 whitespace-pre-line">
             {commentary}
           </p>
+
           <p className="text-[0.7rem] text-zinc-500">
             This narrative is generated from observed fixing levels, recent
             changes, and volatility bands in the USD/SSP pair to help policy
