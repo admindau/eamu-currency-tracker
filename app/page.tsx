@@ -590,21 +590,22 @@ export default async function HomePage() {
             </Link>
           </div>
 
-          <div className="grid gap-4 md:grid-cols-[minmax(0,1.2fr)_minmax(0,1fr)]">
+          {/* Slim commentary (380px) + wide EAMU cards */}
+          <div className="grid gap-4 md:grid-cols-[380px_minmax(0,1.6fr)] items-start">
             {/* Anchor + commentary */}
-            <div className="rounded-2xl border border-zinc-800 bg-zinc-950/70 p-4 text-xs space-y-3">
-              <div className="flex items-center justify-between gap-3">
-                <div>
-                  <p className="text-[0.65rem] uppercase tracking-[0.2em] text-zinc-500">
-                    Anchor commentary (beta)
-                  </p>
-                  <p className="text-sm font-medium">USD/SSP daily note</p>
-                </div>
+            <div className="rounded-xl border border-zinc-800 bg-zinc-950/70 p-3 text-[0.7rem] space-y-2">
+              <div>
+                <p className="text-[0.62rem] uppercase tracking-[0.2em] text-zinc-500">
+                  Anchor commentary (beta)
+                </p>
+                <p className="text-xs font-medium text-zinc-100">
+                  USD/SSP daily note
+                </p>
               </div>
-              <p className="text-[0.8rem] leading-relaxed text-zinc-300">
+              <p className="text-[0.68rem] leading-relaxed text-zinc-300">
                 {commentary}
               </p>
-              <p className="text-[0.7rem] text-zinc-500">
+              <p className="text-[0.62rem] text-zinc-500">
                 This paragraph is generated algorithmically from the same fixing
                 history used by Savvy Rilla FX. Treat it as a starting point for
                 human analysis, not as investment advice.
