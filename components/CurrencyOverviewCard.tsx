@@ -59,16 +59,39 @@ export function CurrencyOverviewCard({
     [eamuRates, selectedCode]
   );
 
-  const sortedRates = useMemo(
-    () =>
-      [...eamuRates].sort((a, b) => {
-        // Keep KES roughly first for familiarity
-        if (a.code === "KES") return -1;
-        if (b.code === "KES") return 1;
-        return a.name.localeCompare(b.name);
-      }),
-    [eamuRates]
-  );
+  // Sort so:
+  // 1) KES always first
+  // 2) Currencies with full data (rate + change + history) come before "empty" ones
+  // 3) Remaining ties sorted by name
+  const sortedRates = useMemo(() => {
+    const richnessScore = (r: EamuRate) => {
+      const hasRate = r.rate !== null && r.rate !== undefined;
+      const hasChange = r.changePct !== null && r.changePct !== undefined;
+      const hasHistory = !!(r.history && r.history.length > 0);
+
+      // Lower score = "richer" data
+      let score = 0;
+      if (!hasRate) score += 4;
+      if (!hasChange) score += 2;
+      if (!hasHistory) score += 1;
+
+      return score;
+    };
+
+    return [...eamuRates].sort((a, b) => {
+      // Keep KES anchored at the front
+      if (a.code === "KES") return -1;
+      if (b.code === "KES") return 1;
+
+      const sA = richnessScore(a);
+      const sB = richnessScore(b);
+
+      if (sA !== sB) return sA - sB;
+
+      // Fallback to alphabetical by name
+      return a.name.localeCompare(b.name);
+    });
+  }, [eamuRates]);
 
   const handleCardClick = (code: string) => {
     setSelectedCode(code);
