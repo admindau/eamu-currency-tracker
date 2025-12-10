@@ -114,7 +114,6 @@ async function fetchJson<T>(path: string): Promise<T | null> {
 
 function buildEamuOverview(summary: SummaryMarketResponse | null): {
   anchor: CurrencyOverview;
-  members: CurrencyOverview[];
 } {
   const dummy: CurrencyOverview = {
     code: "USD",
@@ -128,64 +127,6 @@ function buildEamuOverview(summary: SummaryMarketResponse | null): {
   if (!summary) {
     return {
       anchor: dummy,
-      members: [
-        {
-          code: "KES",
-          name: "Kenyan Shilling",
-          region: "Kenya",
-          latest_mid: null,
-          latest_date: null,
-          day_change_pct: null,
-        },
-        {
-          code: "UGX",
-          name: "Ugandan Shilling",
-          region: "Uganda",
-          latest_mid: null,
-          latest_date: null,
-          day_change_pct: null,
-        },
-        {
-          code: "TZS",
-          name: "Tanzanian Shilling",
-          region: "Tanzania",
-          latest_mid: null,
-          latest_date: null,
-          day_change_pct: null,
-        },
-        {
-          code: "RWF",
-          name: "Rwandan Franc",
-          region: "Rwanda",
-          latest_mid: null,
-          latest_date: null,
-          day_change_pct: null,
-        },
-        {
-          code: "BIF",
-          name: "Burundian Franc",
-          region: "Burundi",
-          latest_mid: null,
-          latest_date: null,
-          day_change_pct: null,
-        },
-        {
-          code: "CDF",
-          name: "Congolese Franc",
-          region: "DR Congo",
-          latest_mid: null,
-          latest_date: null,
-          day_change_pct: null,
-        },
-        {
-          code: "SOS",
-          name: "Somali Shilling",
-          region: "Somalia",
-          latest_mid: null,
-          latest_date: null,
-          day_change_pct: null,
-        },
-      ],
     };
   }
 
@@ -198,66 +139,7 @@ function buildEamuOverview(summary: SummaryMarketResponse | null): {
     day_change_pct: summary.change_pct_vs_previous ?? null,
   };
 
-  const members: CurrencyOverview[] = [
-    {
-      code: "KES",
-      name: "Kenyan Shilling",
-      region: "Kenya",
-      latest_mid: null,
-      latest_date: null,
-      day_change_pct: null,
-    },
-    {
-      code: "UGX",
-      name: "Ugandan Shilling",
-      region: "Uganda",
-      latest_mid: null,
-      latest_date: null,
-      day_change_pct: null,
-    },
-    {
-      code: "TZS",
-      name: "Tanzanian Shilling",
-      region: "Tanzania",
-      latest_mid: null,
-      latest_date: null,
-      day_change_pct: null,
-    },
-    {
-      code: "RWF",
-      name: "Rwandan Franc",
-      region: "Rwanda",
-      latest_mid: null,
-      latest_date: null,
-      day_change_pct: null,
-    },
-    {
-      code: "BIF",
-      name: "Burundian Franc",
-      region: "Burundi",
-      latest_mid: null,
-      latest_date: null,
-      day_change_pct: null,
-    },
-    {
-      code: "CDF",
-      name: "Congolese Franc",
-      region: "DR Congo",
-      latest_mid: null,
-      latest_date: null,
-      day_change_pct: null,
-    },
-    {
-      code: "SOS",
-      name: "Somali Shilling",
-      region: "Somalia",
-      latest_mid: null,
-      latest_date: null,
-      day_change_pct: null,
-    },
-  ];
-
-  return { anchor, members };
+  return { anchor };
 }
 
 function buildDailyCommentary(summary: SummaryMarketResponse | null): string {
@@ -331,9 +213,14 @@ export default async function HomePage() {
   const hintText =
     summaryInsights && summaryInsights.length > 1 ? summaryInsights[1] : null;
 
-  const commentary = buildDailyCommentary(summary);
+  const commentaryText = buildDailyCommentary(summary);
+  const commentaryPayload = {
+    summary: commentaryText,
+    anchorPair: "USD/SSP",
+    windowLabel: "365-day anchor window",
+  };
 
-  const { anchor, members } = buildEamuOverview(summary);
+  const { anchor } = buildEamuOverview(summary);
 
   const series =
     points.length > 0
@@ -437,7 +324,6 @@ export default async function HomePage() {
       sourceLabel,
     };
   });
-
 
   return (
     <main className="min-h-screen bg-black text-zinc-100">
@@ -648,37 +534,13 @@ export default async function HomePage() {
             </Link>
           </div>
 
-          {/* Slim commentary (380px) + wide EAMU cards */}
-          <div className="grid gap-4 md:grid-cols-[380px_minmax(0,1.6fr)] items-start">
-      {/* Anchor + commentary (ultra-compact) */}
-      <div className="rounded-xl border border-zinc-900 bg-zinc-950/60 p-2 text-[0.65rem] space-y-1 max-h-[160px] overflow-hidden">
-        <div>
-          <p className="text-[0.55rem] uppercase tracking-[0.18em] text-zinc-500">
-            Anchor commentary (beta)
-         </p>
-        <p className="text-[0.68rem] font-medium text-zinc-200 leading-tight">
-        USD/SSP daily note
-    </p>
-  </div>
-
-  <p className="text-[0.63rem] leading-snug text-zinc-300 line-clamp-4">
-    {commentary}
-  </p>
-
-  <p className="text-[0.56rem] text-zinc-600">
-    Auto-generated from daily fixing data.
-  </p>
-</div>
-
-
-            {/* Members grid extracted to component */}
-            <CurrencyOverviewCard
-              commentary={commentary}
-              eamuRates={eamuRates}
-              latestBase={latestBase}
-              latestDate={latestDate}
-            />
-          </div>
+          {/* Main EAMU grid + commentary (Option B) */}
+          <CurrencyOverviewCard
+            commentary={commentaryPayload}
+            eamuRates={eamuRates}
+            latestBase={latestBase}
+            latestDate={latestDate}
+          />
         </section>
 
         {/* Recent table */}

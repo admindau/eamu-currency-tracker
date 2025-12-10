@@ -1,28 +1,135 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 
 type HistoryPoint = { date: string; mid: number };
 
 type Series = {
-  label: string; // "30d", "90d", "365d"
+  label: string; // "30d", "90d", "365d" or "90d"/"365d"/"all" in fetch mode
   days: number;
   points: HistoryPoint[];
 };
 
-type Props = {
+type WindowKey = "90d" | "365d" | "all";
+
+type SeriesProps = {
   series: Series[];
+  base?: undefined;
+  quote?: undefined;
+  window?: undefined;
 };
 
-export default function FxHistoryChart({ series }: Props) {
+type FetchProps = {
+  series?: undefined;
+  base: string;
+  quote: string;
+  window: WindowKey;
+};
+
+type Props = SeriesProps | FetchProps;
+
+type AnchorHistoryResponse = {
+  pair: string;
+  window: WindowKey;
+  minDate: string;
+  maxDate: string;
+  history: { date: string; mid: number }[];
+  overrides: { date: string; mid: number }[];
+};
+
+export default function FxHistoryChart(props: Props) {
+  const isSeriesMode = "series" in props && props.series !== undefined;
+
+  const [fetchedSeries, setFetchedSeries] = useState<Series[] | null>(null);
+  const [loading, setLoading] = useState(false);
+  const [fetchError, setFetchError] = useState<string | null>(null);
   const [activeLabel, setActiveLabel] = useState<string>(
-    series[0]?.label ?? "30d"
+    isSeriesMode && props.series.length > 0 ? props.series[0].label : ""
   );
 
-  const activeSeries = useMemo(
-    () => series.find((s) => s.label === activeLabel) ?? series[0],
-    [activeLabel, series]
-  );
+  // Fetch branch for base/quote/window mode
+  useEffect(() => {
+    if (isSeriesMode) {
+      setFetchedSeries(null);
+      setFetchError(null);
+      const series = (props as SeriesProps).series;
+      const firstLabel = series && series.length > 0 ? series[0].label : "";
+      setActiveLabel(firstLabel);
+      return;
+    }
+
+    const { base, quote, window } = props as FetchProps;
+
+    if (!base || !quote || !window) return;
+
+    setLoading(true);
+    setFetchError(null);
+
+    const pair = `${base}${quote}`.toUpperCase();
+
+    fetch(`/api/admin/anchor-history?pair=${pair}&window=${window}`, {
+      cache: "no-store",
+    })
+      .then(async (res) => {
+        if (!res.ok) {
+          const text = await res.text();
+          throw new Error(text || `HTTP ${res.status}`);
+        }
+        return (await res.json()) as AnchorHistoryResponse;
+      })
+      .then((json) => {
+        const pts: HistoryPoint[] = (json.history ?? []).map((h) => ({
+          date: h.date,
+          mid: h.mid,
+        }));
+
+        const days =
+          window === "90d" ? 90 : window === "365d" ? 365 : pts.length;
+
+        const s: Series = {
+          label: window,
+          days,
+          points: pts,
+        };
+
+        setFetchedSeries([s]);
+        setActiveLabel(window);
+      })
+      .catch((err) => {
+        console.error("FxHistoryChart fetch error:", err);
+        setFetchError("Unable to load history.");
+        setFetchedSeries(null);
+      })
+      .finally(() => {
+        setLoading(false);
+      });
+  }, [isSeriesMode, props]);
+
+  const series: Series[] = isSeriesMode
+    ? (props as SeriesProps).series
+    : fetchedSeries ?? [];
+
+  const activeSeries = useMemo(() => {
+    if (!series || series.length === 0) return undefined;
+    if (!activeLabel) return series[0];
+    return series.find((s) => s.label === activeLabel) ?? series[0];
+  }, [activeLabel, series]);
+
+  if (loading && series.length === 0) {
+    return (
+      <div className="mt-2 rounded-xl border border-zinc-900 bg-zinc-950 px-3 py-2 text-[0.75rem] text-zinc-500">
+        Loading history…
+      </div>
+    );
+  }
+
+  if (fetchError && series.length === 0) {
+    return (
+      <div className="mt-2 rounded-xl border border-zinc-900 bg-zinc-950 px-3 py-2 text-[0.75rem] text-red-400">
+        {fetchError}
+      </div>
+    );
+  }
 
   if (!activeSeries || !activeSeries.points || activeSeries.points.length < 2) {
     return (
@@ -67,30 +174,32 @@ export default function FxHistoryChart({ series }: Props) {
 
   return (
     <div className="mt-3 space-y-2">
-      {/* Header + toggle */}
-      <div className="flex items-center justify-between gap-2 text-[0.7rem]">
-        <p className="text-zinc-400">USD/SSP history</p>
-        <div className="inline-flex items-center gap-1 rounded-full bg-zinc-950 p-1 border border-zinc-800">
-          {series.map((s) => {
-            const isActive = s.label === activeLabel;
-            return (
-              <button
-                key={s.label}
-                type="button"
-                onClick={() => setActiveLabel(s.label)}
-                className={
-                  "rounded-full px-2 py-0.5 text-[0.65rem] transition " +
-                  (isActive
-                    ? "bg-zinc-100 text-black"
-                    : "text-zinc-400 hover:text-zinc-100")
-                }
-              >
-                {s.label}
-              </button>
-            );
-          })}
+      {/* Header + toggle (only meaningful in series mode with >1 entries) */}
+      {series.length > 1 && (
+        <div className="flex items-center justify-between gap-2 text-[0.7rem]">
+          <p className="text-zinc-400">USD/SSP history</p>
+          <div className="inline-flex items-center gap-1 rounded-full bg-zinc-950 p-1 border border-zinc-800">
+            {series.map((s) => {
+              const isActive = s.label === activeLabel;
+              return (
+                <button
+                  key={s.label}
+                  type="button"
+                  onClick={() => setActiveLabel(s.label)}
+                  className={
+                    "rounded-full px-2 py-0.5 text-[0.65rem] transition " +
+                    (isActive
+                      ? "bg-zinc-100 text-black"
+                      : "text-zinc-400 hover:text-zinc-100")
+                  }
+                >
+                  {s.label}
+                </button>
+              );
+            })}
+          </div>
         </div>
-      </div>
+      )}
 
       {/* Chart */}
       <div className="rounded-xl border border-zinc-900 bg-zinc-950 px-3 py-2">
