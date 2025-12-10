@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useEffect, useState, useMemo } from "react";
+import React, { useEffect, useMemo, useState } from "react";
 import { Line } from "react-chartjs-2";
 import {
   Chart as ChartJS,
@@ -27,18 +27,18 @@ ChartJS.register(
 type WindowKey = "90d" | "365d" | "all";
 
 type HistoryPoint = {
-  date: string;
+  date: string; // YYYY-MM-DD
   mid: number;
 };
 
 type OverridePoint = {
-  date: string;
+  date: string; // YYYY-MM-DD
   mid: number;
 };
 
 type AnchorHistoryResponse = {
   pair: string;
-  window: WindowKey;
+  window: string;
   history: HistoryPoint[];
   overrides: OverridePoint[];
 };
@@ -49,7 +49,6 @@ const WINDOW_OPTIONS: { key: WindowKey; label: string }[] = [
   { key: "all", label: "All" },
 ];
 
-// SSP as base for all regional currencies
 const PAIR_OPTIONS = [
   { key: "SSPUSD", label: "SSP / USD" },
   { key: "SSPKES", label: "SSP / KES" },
@@ -101,6 +100,10 @@ const chartOptions: ChartOptions<"line"> = {
   },
 };
 
+function dateToString(d: Date): string {
+  return d.toISOString().slice(0, 10);
+}
+
 export default function AdminAnalyticsCard() {
   const [windowKey, setWindowKey] = useState<WindowKey>("365d");
   const [pairKey, setPairKey] = useState<string>(DEFAULT_PAIR);
@@ -108,7 +111,7 @@ export default function AdminAnalyticsCard() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  // Fetch history whenever pair or window changes
+  // Always fetch FULL history for the selected pair
   useEffect(() => {
     let cancelled = false;
 
@@ -119,12 +122,13 @@ export default function AdminAnalyticsCard() {
 
         const params = new URLSearchParams({
           pair: pairKey,
-          window: windowKey,
+          // Force backend to give us full history; we’ll window on the client
+          window: "all",
         });
 
         const res = await fetch(
           `/api/admin/anchor-history?${params.toString()}`,
-          { cache: "no-store" }
+          { cache: "no-store" },
         );
 
         if (!res.ok) {
@@ -149,66 +153,113 @@ export default function AdminAnalyticsCard() {
     return () => {
       cancelled = true;
     };
-  }, [pairKey, windowKey]);
+  }, [pairKey]);
 
-  const chartData = useMemo(() => {
-    if (!data || !data.history || !data.history.length) return null;
+  const {
+    chartData,
+    fullStart,
+    fullEnd,
+    windowStart,
+    windowEnd,
+    overrideCount,
+  } = useMemo(() => {
+    if (!data || !data.history || data.history.length === 0) {
+      return {
+        chartData: null,
+        fullStart: null as string | null,
+        fullEnd: null as string | null,
+        windowStart: null as string | null,
+        windowEnd: null as string | null,
+        overrideCount: 0,
+      };
+    }
 
-    // Ensure chronological order: oldest → newest
-    const sortedHistory = [...data.history].sort((a, b) =>
-      a.date < b.date ? -1 : a.date > b.date ? 1 : 0
+    // 1) Sort full history oldest → newest
+    const sortedFull = [...data.history].sort((a, b) =>
+      a.date < b.date ? -1 : a.date > b.date ? 1 : 0,
     );
 
-    // >>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>
-    // DEBUG BLOCK (Added exactly as requested)
-    console.log("HISTORY LENGTH:", sortedHistory.length);
-    console.log("FIRST:", sortedHistory[0]);
-    console.log("LAST:", sortedHistory[sortedHistory.length - 1]);
-    // <<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<
+    const fullStart = sortedFull[0]?.date ?? null;
+    const fullEnd = sortedFull[sortedFull.length - 1]?.date ?? null;
 
-    const labels = sortedHistory.map((p) => p.date);
+    // 2) Determine cutoff based on selected window, anchored to latest date
+    let filteredHistory: HistoryPoint[] = sortedFull;
 
-    // Map overrides by date
+    if (windowKey !== "all" && fullEnd) {
+      const daysBack = windowKey === "90d" ? 90 : 365;
+      const latest = new Date(fullEnd);
+      latest.setUTCHours(0, 0, 0, 0);
+
+      const cutoff = new Date(latest);
+      cutoff.setUTCDate(cutoff.getUTCDate() - daysBack);
+
+      const cutoffStr = dateToString(cutoff);
+      filteredHistory = sortedFull.filter((p) => p.date >= cutoffStr);
+    }
+
+    const windowStart =
+      filteredHistory.length > 0 ? filteredHistory[0].date : null;
+    const windowEnd =
+      filteredHistory.length > 0
+        ? filteredHistory[filteredHistory.length - 1].date
+        : null;
+
+    // 3) Map overrides, filtered to same window
     const overridesByDate = new Map<string, number>();
-    (data.overrides ?? []).forEach((o) =>
-      overridesByDate.set(o.date, o.mid)
-    );
+    (data.overrides ?? []).forEach((o) => {
+      overridesByDate.set(o.date, o.mid);
+    });
 
-    const overrideSeries = sortedHistory.map((p) => {
+    const labels = filteredHistory.map((p) => p.date);
+    const midSeries = filteredHistory.map((p) => p.mid);
+    const overrideSeries = filteredHistory.map((p) => {
       const v = overridesByDate.get(p.date);
       return typeof v === "number" ? v : NaN;
     });
 
+    const chartData =
+      labels.length === 0
+        ? null
+        : {
+            labels,
+            datasets: [
+              {
+                label: "Mid rate",
+                data: midSeries,
+                borderColor: "rgba(52, 211, 153, 1)",
+                backgroundColor: "rgba(16, 185, 129, 0.15)",
+                tension: 0.25,
+                borderWidth: 1.7,
+                pointRadius: 0,
+                pointHitRadius: 6,
+                fill: true,
+              },
+              {
+                label: "Override",
+                data: overrideSeries,
+                showLine: false,
+                borderColor: "rgba(251, 191, 36, 1)",
+                backgroundColor: "rgba(251, 191, 36, 1)",
+                pointRadius: 4,
+                pointHoverRadius: 6,
+              },
+            ],
+          };
+
+    const overrideCount = data.overrides?.length ?? 0;
+
     return {
-      labels,
-      datasets: [
-        {
-          label: "Mid rate",
-          data: sortedHistory.map((p) => p.mid),
-          borderColor: "rgba(52, 211, 153, 1)",
-          backgroundColor: "rgba(16, 185, 129, 0.15)",
-          tension: 0.25,
-          borderWidth: 1.7,
-          pointRadius: 0,
-          pointHitRadius: 6,
-          fill: true,
-        },
-        {
-          label: "Override",
-          data: overrideSeries,
-          showLine: false,
-          borderColor: "rgba(251, 191, 36, 1)",
-          backgroundColor: "rgba(251, 191, 36, 1)",
-          pointRadius: 4,
-          pointHoverRadius: 6,
-        },
-      ],
+      chartData,
+      fullStart,
+      fullEnd,
+      windowStart,
+      windowEnd,
+      overrideCount,
     };
-  }, [data]);
+  }, [data, windowKey]);
 
   const activePair = data?.pair ?? pairKey;
   const activePairLabel = `${activePair.slice(0, 3)}/${activePair.slice(3)}`;
-  const overrideCount = data?.overrides?.length ?? 0;
 
   return (
     <section className="flex flex-col rounded-2xl border border-zinc-800 bg-black/90 p-6 shadow-lg shadow-black/40">
@@ -219,11 +270,15 @@ export default function AdminAnalyticsCard() {
             Admin analytics
           </p>
           <h2 className="text-sm font-medium text-zinc-100">
-            Volatility and anchor-pair history using live engine data.
+            Volatility and anchor-pair history for {activePairLabel}, using live
+            engine data.
           </h2>
           <p className="text-[11px] text-zinc-500">
             Viewing{" "}
-            {windowKey === "all" ? "full available history" : `last ${windowKey}`}.
+            {windowKey === "all"
+              ? "full available history"
+              : `last ${windowKey}`}{" "}
+            from the latest fixing.
           </p>
         </div>
 
@@ -292,15 +347,34 @@ export default function AdminAnalyticsCard() {
         )}
       </div>
 
-      {/* Footnote */}
-      <p className="mt-3 text-[11px] leading-relaxed text-zinc-500">
-        In this window, the system has{" "}
-        <span className="font-semibold text-zinc-300">{overrideCount}</span>{" "}
-        manual {activePairLabel} overrides captured in{" "}
-        <span className="font-mono text-zinc-400">manual_fixings</span>. Days
-        with overrides are highlighted as amber markers on the chart so you can
-        see where policy actions intersect with market moves.
-      </p>
+      {/* Diagnostics / Footnote */}
+      <div className="mt-3 space-y-1 text-[11px] leading-relaxed text-zinc-500">
+        <p>
+          In this window, the system has{" "}
+          <span className="font-semibold text-zinc-300">{overrideCount}</span>{" "}
+          manual {activePairLabel} overrides captured in{" "}
+          <span className="font-mono text-zinc-400">manual_fixings</span>.
+          Overrides are highlighted as amber markers on the chart where they
+          intersect engine fixings.
+        </p>
+
+        {fullStart && fullEnd && (
+          <p className="text-[10px] text-zinc-600">
+            Dataset range:{" "}
+            <span className="font-mono text-zinc-300">
+              {fullStart} → {fullEnd}
+            </span>{" "}
+            | Current window:{" "}
+            {windowStart && windowEnd ? (
+              <span className="font-mono text-zinc-300">
+                {windowStart} → {windowEnd}
+              </span>
+            ) : (
+              "no points in window"
+            )}
+          </p>
+        )}
+      </div>
     </section>
   );
 }
