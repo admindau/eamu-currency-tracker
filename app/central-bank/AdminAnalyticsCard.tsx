@@ -24,7 +24,7 @@ ChartJS.register(
   Filler,
 );
 
-type WindowKey = "90d" | "365d" | "all";
+type WindowKey = "90d" | "365d";
 
 type HistoryPoint = {
   date: string; // YYYY-MM-DD
@@ -46,7 +46,6 @@ type AnchorHistoryResponse = {
 const WINDOW_OPTIONS: { key: WindowKey; label: string }[] = [
   { key: "90d", label: "90d" },
   { key: "365d", label: "365d" },
-  { key: "all", label: "All" },
 ];
 
 const PAIR_OPTIONS = [
@@ -122,7 +121,7 @@ export default function AdminAnalyticsCard() {
 
         const params = new URLSearchParams({
           pair: pairKey,
-          // Force backend to give us full history; we’ll window on the client
+          // Ask backend for full history; client will window to 90/365d
           window: "all",
         });
 
@@ -185,7 +184,7 @@ export default function AdminAnalyticsCard() {
     // 2) Determine cutoff based on selected window, anchored to latest date
     let filteredHistory: HistoryPoint[] = sortedFull;
 
-    if (windowKey !== "all" && fullEnd) {
+    if (fullEnd) {
       const daysBack = windowKey === "90d" ? 90 : 365;
       const latest = new Date(fullEnd);
       latest.setUTCHours(0, 0, 0, 0);
@@ -274,11 +273,7 @@ export default function AdminAnalyticsCard() {
             engine data.
           </h2>
           <p className="text-[11px] text-zinc-500">
-            Viewing{" "}
-            {windowKey === "all"
-              ? "full available history"
-              : `last ${windowKey}`}{" "}
-            from the latest fixing.
+            Viewing last {windowKey} from the latest fixing.
           </p>
         </div>
 
@@ -351,7 +346,9 @@ export default function AdminAnalyticsCard() {
       <div className="mt-3 space-y-1 text-[11px] leading-relaxed text-zinc-500">
         <p>
           In this window, the system has{" "}
-          <span className="font-semibold text-zinc-300">{overrideCount}</span>{" "}
+            <span className="font-semibold text-zinc-300">
+              {overrideCount}
+            </span>{" "}
           manual {activePairLabel} overrides captured in{" "}
           <span className="font-mono text-zinc-400">manual_fixings</span>.
           Overrides are highlighted as amber markers on the chart where they
