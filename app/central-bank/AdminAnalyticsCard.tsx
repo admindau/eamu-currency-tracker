@@ -70,9 +70,7 @@ const chartOptions: ChartOptions<"line"> = {
   },
   scales: {
     x: {
-      grid: {
-        display: false,
-      },
+      grid: { display: false },
       ticks: {
         maxTicksLimit: 6,
         color: "#9ca3af",
@@ -81,18 +79,12 @@ const chartOptions: ChartOptions<"line"> = {
       },
     },
     y: {
-      grid: {
-        color: "rgba(75, 85, 99, 0.3)",
-      },
-      ticks: {
-        color: "#9ca3af",
-      },
+      grid: { color: "rgba(75, 85, 99, 0.3)" },
+      ticks: { color: "#9ca3af" },
     },
   },
   plugins: {
-    legend: {
-      display: false,
-    },
+    legend: { display: false },
     tooltip: {
       callbacks: {
         title(items) {
@@ -101,9 +93,7 @@ const chartOptions: ChartOptions<"line"> = {
         },
         label(item) {
           const value = item.formattedValue ?? "";
-          if (item.datasetIndex === 1) {
-            return `Override: ${value}`;
-          }
+          if (item.datasetIndex === 1) return `Override: ${value}`;
           return `Mid: ${value}`;
         },
       },
@@ -134,9 +124,7 @@ export default function AdminAnalyticsCard() {
 
         const res = await fetch(
           `/api/admin/anchor-history?${params.toString()}`,
-          {
-            cache: "no-store",
-          },
+          { cache: "no-store" }
         );
 
         if (!res.ok) {
@@ -145,9 +133,7 @@ export default function AdminAnalyticsCard() {
         }
 
         const json = (await res.json()) as AnchorHistoryResponse;
-        if (!cancelled) {
-          setData(json);
-        }
+        if (!cancelled) setData(json);
       } catch (err: any) {
         console.error("Failed to load anchor history", err);
         if (!cancelled) {
@@ -155,36 +141,38 @@ export default function AdminAnalyticsCard() {
           setData(null);
         }
       } finally {
-        if (!cancelled) {
-          setLoading(false);
-        }
+        if (!cancelled) setLoading(false);
       }
     }
 
     load();
-
     return () => {
       cancelled = true;
     };
   }, [pairKey, windowKey]);
 
   const chartData = useMemo(() => {
-    if (!data || !data.history || !data.history.length) {
-      return null;
-    }
+    if (!data || !data.history || !data.history.length) return null;
 
     // Ensure chronological order: oldest → newest
     const sortedHistory = [...data.history].sort((a, b) =>
-      a.date < b.date ? -1 : a.date > b.date ? 1 : 0,
+      a.date < b.date ? -1 : a.date > b.date ? 1 : 0
     );
+
+    // >>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>
+    // DEBUG BLOCK (Added exactly as requested)
+    console.log("HISTORY LENGTH:", sortedHistory.length);
+    console.log("FIRST:", sortedHistory[0]);
+    console.log("LAST:", sortedHistory[sortedHistory.length - 1]);
+    // <<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<
 
     const labels = sortedHistory.map((p) => p.date);
 
-    // Map overrides by date so we can align with the history series
+    // Map overrides by date
     const overridesByDate = new Map<string, number>();
-    (data.overrides ?? []).forEach((o) => {
-      overridesByDate.set(o.date, o.mid);
-    });
+    (data.overrides ?? []).forEach((o) =>
+      overridesByDate.set(o.date, o.mid)
+    );
 
     const overrideSeries = sortedHistory.map((p) => {
       const v = overridesByDate.get(p.date);
@@ -197,7 +185,7 @@ export default function AdminAnalyticsCard() {
         {
           label: "Mid rate",
           data: sortedHistory.map((p) => p.mid),
-          borderColor: "rgba(52, 211, 153, 1)", // emerald-400
+          borderColor: "rgba(52, 211, 153, 1)",
           backgroundColor: "rgba(16, 185, 129, 0.15)",
           tension: 0.25,
           borderWidth: 1.7,
@@ -209,7 +197,7 @@ export default function AdminAnalyticsCard() {
           label: "Override",
           data: overrideSeries,
           showLine: false,
-          borderColor: "rgba(251, 191, 36, 1)", // amber-400
+          borderColor: "rgba(251, 191, 36, 1)",
           backgroundColor: "rgba(251, 191, 36, 1)",
           pointRadius: 4,
           pointHoverRadius: 6,
@@ -235,9 +223,7 @@ export default function AdminAnalyticsCard() {
           </h2>
           <p className="text-[11px] text-zinc-500">
             Viewing{" "}
-            {windowKey === "all"
-              ? "full available history"
-              : `last ${windowKey}`}.
+            {windowKey === "all" ? "full available history" : `last ${windowKey}`}.
           </p>
         </div>
 
@@ -261,7 +247,7 @@ export default function AdminAnalyticsCard() {
             ))}
           </div>
 
-          {/* Pair selector (SSP as base) */}
+          {/* Pair selector */}
           <div className="inline-flex max-w-full flex-wrap gap-1 text-[11px]">
             {PAIR_OPTIONS.map((p) => (
               <button
@@ -281,7 +267,7 @@ export default function AdminAnalyticsCard() {
         </div>
       </div>
 
-      {/* Chart area */}
+      {/* Chart */}
       <div className="mt-1 h-[260px] w-full">
         {loading && (
           <div className="flex h-full items-center justify-center text-xs text-zinc-400">
