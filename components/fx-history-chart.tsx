@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useState, useRef } from "react";
+import type React from "react";
 
 type HistoryPoint = { date: string; mid: number };
 
