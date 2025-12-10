@@ -6,6 +6,7 @@ import {
   buildInsightsFromSummary,
   type MarketSummary,
 } from "@/lib/fx/insights";
+import { CurrencyOverviewCard } from "@/components/CurrencyOverviewCard";
 
 export const metadata: Metadata = {
   title:
@@ -318,20 +319,17 @@ export default async function HomePage() {
       "/api/v1/rates/history?base=SSP&quote=USD&days=365"
     ),
     fetchJson<RecentRatesResponse>("/api/v1/rates/recent?base=SSP&limit=50"),
-    fetchJson<SummaryMarketResponse>("/api/v1/summary/market?base=SSP&quote=USD"),
+    fetchJson<SummaryMarketResponse>(
+      "/api/v1/summary/market?base=SSP&quote=USD"
+    ),
   ]);
 
   const points = history?.points ?? [];
-  // buildInsightsFromSummary returns string[]
   const summaryInsights = summary ? buildInsightsFromSummary(summary) : null;
   const primaryInsight =
-    summaryInsights && summaryInsights.length > 0
-      ? summaryInsights[0]
-      : null;
+    summaryInsights && summaryInsights.length > 0 ? summaryInsights[0] : null;
   const hintText =
-    summaryInsights && summaryInsights.length > 1
-      ? summaryInsights[1]
-      : null;
+    summaryInsights && summaryInsights.length > 1 ? summaryInsights[1] : null;
 
   const commentary = buildDailyCommentary(summary);
 
@@ -349,6 +347,40 @@ export default async function HomePage() {
       : [];
 
   const recentRows = recent?.data ?? [];
+
+  // ----------------------------------------
+  // EAMU member snapshot for CurrencyOverviewCard
+  // ----------------------------------------
+
+  const EAMU_COUNTRIES: { code: string; name: string; flag: string }[] = [
+    { code: "KES", name: "Kenyan Shilling", flag: "🇰🇪" },
+    { code: "UGX", name: "Ugandan Shilling", flag: "🇺🇬" },
+    { code: "TZS", name: "Tanzanian Shilling", flag: "🇹🇿" },
+    { code: "RWF", name: "Rwandan Franc", flag: "🇷🇼" },
+    { code: "BIF", name: "Burundian Franc", flag: "🇧🇮" },
+    { code: "CDF", name: "Congolese Franc", flag: "🇨🇩" },
+    { code: "SOS", name: "Somali Shilling", flag: "🇸🇴" },
+  ];
+
+  const latestBase = "SSP";
+
+  const latestDate: string | null =
+    summary?.as_of_date ??
+    (recentRows.length > 0 ? recentRows[0].as_of_date : null);
+
+  const eamuRates = EAMU_COUNTRIES.map((country) => {
+    const match = recentRows.find(
+      (row) =>
+        row.base_currency === "SSP" && row.quote_currency === country.code
+    );
+
+    return {
+      code: country.code,
+      name: country.name,
+      flag: country.flag,
+      rate: match ? match.rate_mid : null,
+    };
+  });
 
   return (
     <main className="min-h-screen bg-black text-zinc-100">
@@ -579,48 +611,13 @@ export default async function HomePage() {
               </p>
             </div>
 
-            {/* Members grid */}
-            <div className="rounded-2xl border border-zinc-800 bg-zinc-950/70 p-4 text-xs space-y-3">
-              <div className="flex items-center justify-between gap-3">
-                <div>
-                  <p className="text-[0.65rem] uppercase tracking-[0.2em] text-zinc-500">
-                    EAMU members (currency view)
-                  </p>
-                  <p className="text-sm font-medium">
-                    Regional currencies tracked by the engine
-                  </p>
-                </div>
-              </div>
-              <div className="grid grid-cols-2 gap-3 text-[0.8rem]">
-                {members.map((m) => (
-                  <div
-                    key={m.code}
-                    className="rounded-xl border border-zinc-800 bg-zinc-950/80 px-3 py-2"
-                  >
-                    <div className="flex items-center justify-between gap-2">
-                      <div>
-                        <p className="text-xs font-semibold text-zinc-100">
-                          {m.region}
-                        </p>
-                        <p className="text-[0.7rem] text-zinc-500">
-                          {m.code} – {m.name}
-                        </p>
-                      </div>
-                      <span className="rounded-full bg-zinc-900 px-2 py-0.5 text-[0.65rem] text-zinc-400">
-                        v1 snapshot
-                      </span>
-                    </div>
-                    <div className="mt-1 text-[0.7rem] text-zinc-500">
-                      <p>Rates vs USD/SSP coming online as history builds.</p>
-                    </div>
-                  </div>
-                ))}
-              </div>
-              <p className="text-[0.7rem] text-zinc-500">
-                Currency coverage will expand over time as more history is
-                collected and stabilised across the region.
-              </p>
-            </div>
+            {/* Members grid extracted to component */}
+            <CurrencyOverviewCard
+              commentary={commentary}
+              eamuRates={eamuRates}
+              latestBase={latestBase}
+              latestDate={latestDate}
+            />
           </div>
         </section>
 
