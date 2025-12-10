@@ -1,120 +1,98 @@
+// app/central-bank/AdminAnalyticsCard.tsx
 "use client";
 
 import React, { useEffect, useMemo, useState } from "react";
+import { Line } from "react-chartjs-2";
 import {
   Chart as ChartJS,
-  CategoryScale,
-  LinearScale,
   LineElement,
   PointElement,
+  CategoryScale,
+  LinearScale,
   Tooltip,
   Legend,
   Filler,
   type ChartOptions,
 } from "chart.js";
-import { Line } from "react-chartjs-2";
 
 ChartJS.register(
-  CategoryScale,
-  LinearScale,
   LineElement,
   PointElement,
+  CategoryScale,
+  LinearScale,
   Tooltip,
   Legend,
-  Filler,
+  Filler
 );
 
-type HistoryPoint = {
-  date: string; // YYYY-MM-DD
+const WINDOW_OPTIONS = ["90d", "365d", "all"] as const;
+type WindowKey = (typeof WINDOW_OPTIONS)[number];
+
+type AnchorHistoryPoint = {
+  date: string;
   mid: number;
 };
 
-type OverridePoint = HistoryPoint;
+type OverridePoint = {
+  date: string;
+  mid: number;
+};
 
 type AnchorHistoryResponse = {
   pair: string;
-  window: string;
-  history: HistoryPoint[];
+  window: WindowKey;
+  minDate: string;
+  maxDate: string;
+  history: AnchorHistoryPoint[];
   overrides: OverridePoint[];
 };
 
-type WindowKey = "90d" | "365d" | "all";
-
-const WINDOW_OPTIONS: Array<{ key: WindowKey; label: string }> = [
-  { key: "90d", label: "90d" },
-  { key: "365d", label: "365d" },
-  { key: "all", label: "All" },
-];
-
-const WINDOW_TO_DAYS: Record<Exclude<WindowKey, "all">, number> = {
-  "90d": 90,
-  "365d": 365,
-};
-
-const PAIR_OPTIONS = [
-  {
-    key: "SSPUSD", // SSP base, USD quote – matches fx_daily_rates_default
-    label: "USD/SSP mid",
-    description: "Anchor pair used across the EAMU FX dashboard",
-  },
-];
-
-function formatDateLabel(date: string): string {
-  const d = new Date(`${date}T00:00:00Z`);
-  return d.toLocaleDateString("en-GB", {
-    day: "2-digit",
-    month: "short",
-    year: "2-digit",
-  });
-}
-
-function formatRange(start?: string, end?: string): string | null {
-  if (!start || !end) return null;
-  if (start === end) return formatDateLabel(start);
-  return `${formatDateLabel(start)} – ${formatDateLabel(end)}`;
+function formatWindowLabel(key: WindowKey) {
+  if (key === "90d") return "90d";
+  if (key === "365d") return "365d";
+  return "All";
 }
 
 export default function AdminAnalyticsCard() {
-  const [activePairKey, setActivePairKey] = useState(PAIR_OPTIONS[0]!.key);
-  const [windowKey, setWindowKey] = useState<WindowKey>("365d");
+  const [activeWindow, setActiveWindow] = useState<WindowKey>("365d");
   const [data, setData] = useState<AnchorHistoryResponse | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  // --------------------------------------------------------------------------
-  // Fetch: always request FULL history from the API (window=all).
-  // Windowing is done purely on the client so "All" really means all rows.
-  // --------------------------------------------------------------------------
+  const activePairLabel = "USD/SSP";
+
   useEffect(() => {
     let cancelled = false;
 
     async function load() {
       setLoading(true);
       setError(null);
-
       try {
-        const params = new URLSearchParams({
-          pair: activePairKey,
-          window: "all",
-        });
-
-        const res = await fetch(`/api/admin/anchor-history?${params.toString()}`, {
-          cache: "no-store",
-        });
+        const res = await fetch(
+          `/api/admin/anchor-history?window=${activeWindow}`,
+          {
+            method: "GET",
+            cache: "no-store",
+          }
+        );
 
         if (!res.ok) {
-          throw new Error(`Request failed with status ${res.status}`);
+          const body = await res.json().catch(() => ({}));
+          throw new Error(
+            body?.error || `Request failed with status ${res.status}`
+          );
         }
 
-        const json = (await res.json()) as AnchorHistoryResponse;
+        const body = (await res.json()) as AnchorHistoryResponse;
 
         if (!cancelled) {
-          setData(json);
+          setData(body);
         }
       } catch (err: any) {
-        console.error("Failed to load admin anchor history", err);
+        console.error("Failed to load admin analytics chart:", err);
         if (!cancelled) {
-          setError("Could not load history. Please try again.");
+          setError(err?.message || "Failed to load chart data");
+          setData(null);
         }
       } finally {
         if (!cancelled) {
@@ -128,133 +106,82 @@ export default function AdminAnalyticsCard() {
     return () => {
       cancelled = true;
     };
-  }, [activePairKey]);
-
-  const fullHistory = useMemo(() => {
-    const history = data?.history ?? [];
-    const sorted = [...history];
-    sorted.sort((a, b) => (a.date < b.date ? -1 : a.date > b.date ? 1 : 0));
-    return sorted;
-  }, [data?.history]);
-
-  const fullStartDate = fullHistory[0]?.date;
-  const fullEndDate = fullHistory[fullHistory.length - 1]?.date;
-
-  const filteredHistory = useMemo<HistoryPoint[]>(() => {
-    if (!fullHistory.length) return [];
-
-    if (windowKey === "all") return fullHistory;
-
-    const daysBack = WINDOW_TO_DAYS[windowKey];
-    const latestStr = fullHistory[fullHistory.length - 1]!.date;
-    const latest = new Date(`${latestStr}T00:00:00Z`);
-
-    const cutoff = new Date(latest);
-    cutoff.setUTCDate(cutoff.getUTCDate() - daysBack);
-    const cutoffStr = cutoff.toISOString().slice(0, 10);
-
-    return fullHistory.filter((p) => p.date >= cutoffStr);
-  }, [fullHistory, windowKey]);
-
-  const overrideMarkers = useMemo<OverridePoint[]>(() => {
-    const overrides = data?.overrides ?? [];
-    if (!overrides.length || !filteredHistory.length) return [];
-
-    const byDate = new Map<string, OverridePoint>();
-    overrides.forEach((o) => byDate.set(o.date, o));
-
-    return filteredHistory
-      .filter((p) => byDate.has(p.date))
-      .map((p) => {
-        const o = byDate.get(p.date)!;
-        return { date: p.date, mid: o.mid ?? p.mid };
-      });
-  }, [data?.overrides, filteredHistory]);
-
-  const overrideCount = overrideMarkers.length;
-  const activePairLabel =
-    PAIR_OPTIONS.find((p) => p.key === activePairKey)?.label ?? activePairKey;
-
-  const windowRangeLabel = useMemo(() => {
-    if (!filteredHistory.length) return null;
-    const start = filteredHistory[0]!.date;
-    const end = filteredHistory[filteredHistory.length - 1]!.date;
-    return formatRange(start, end);
-  }, [filteredHistory]);
+  }, [activeWindow]);
 
   const chartData = useMemo(() => {
-    const labels = filteredHistory.map((p) => formatDateLabel(p.date));
-    const values = filteredHistory.map((p) => p.mid);
+    if (!data || !data.history.length) {
+      return null;
+    }
 
-    const overrideIndices = new Map<string, number>();
-    overrideMarkers.forEach((o) => {
-      const idx = filteredHistory.findIndex((p) => p.date === o.date);
-      if (idx >= 0) overrideIndices.set(o.date, idx);
+    const labels = data.history.map((p) => p.date);
+
+    const overridesByDate = new Map<string, number>();
+    (data.overrides ?? []).forEach((o) => {
+      overridesByDate.set(o.date, o.mid);
     });
 
-    const overridePoints = Array(labels.length).fill(null) as (number | null)[];
-    overrideMarkers.forEach((o) => {
-      const idx = filteredHistory.findIndex((p) => p.date === o.date);
-      if (idx >= 0) {
-        overridePoints[idx] = o.mid;
-      }
-    });
+    const mainSeries = data.history.map((p) => p.mid);
+
+    const overrideMarkers = data.history.map((p) =>
+      overridesByDate.has(p.date) ? overridesByDate.get(p.date)! : null
+    );
 
     return {
       labels,
       datasets: [
         {
-          label: "Mid rate",
-          data: values,
-          borderColor: "rgba(255,255,255,0.9)",
-          backgroundColor: "rgba(255,255,255,0.08)",
-          borderWidth: 1.6,
+          label: "USD/SSP mid",
+          data: mainSeries,
+          borderWidth: 1.5,
+          tension: 0.2,
           pointRadius: 0,
-          pointHitRadius: 6,
-          tension: 0.3,
+          borderColor: "rgba(255,255,255,0.8)",
+          backgroundColor: "rgba(255,255,255,0.04)",
           fill: true,
         },
         {
-          label: "Manual overrides",
-          data: overridePoints,
-          borderColor: "rgba(251,191,36,1)", // amber
-          backgroundColor: "rgba(251,191,36,1)",
-          pointRadius: 3,
-          pointHitRadius: 7,
+          label: "Manual override",
+          data: overrideMarkers,
           borderWidth: 0,
+          pointRadius: 4,
+          pointHoverRadius: 5,
+          pointBackgroundColor: "rgba(255,196,0,1)",
+          pointBorderColor: "rgba(0,0,0,0.9)",
+          pointBorderWidth: 1,
           showLine: false,
         },
       ],
     };
-  }, [filteredHistory, overrideMarkers]);
+  }, [data]);
 
   const chartOptions: ChartOptions<"line"> = useMemo(
     () => ({
       responsive: true,
       maintainAspectRatio: false,
-      interaction: {
-        mode: "index",
-        intersect: false,
-      },
       plugins: {
         legend: {
           display: false,
         },
         tooltip: {
+          mode: "index",
+          intersect: false,
+          displayColors: false,
           callbacks: {
-            title(items) {
-              const item = items[0];
-              const rawDate =
-                filteredHistory[item.dataIndex]?.date ?? item.label;
-              return formatDateLabel(rawDate as string);
+            title: (items) => {
+              if (!items.length) return "";
+              return items[0].label || "";
             },
-            label(context) {
-              const value = context.parsed.y;
-              if (value == null) return "";
-              return `Mid: ${value.toLocaleString("en-KE", {
-                minimumFractionDigits: 3,
-                maximumFractionDigits: 3,
-              })}`;
+            label: (item) => {
+              const y = item.parsed?.y;
+              if (y == null) {
+                // Nothing to show if the point has no numeric value
+                return "";
+              }
+
+              if (item.datasetIndex === 1) {
+                return `Manual fixing: ${y.toLocaleString()}`;
+              }
+              return `Mid: ${y.toLocaleString()}`;
             },
           },
         },
@@ -262,124 +189,102 @@ export default function AdminAnalyticsCard() {
       scales: {
         x: {
           grid: {
-            display: false,
+            color: "rgba(255,255,255,0.06)",
           },
           ticks: {
             maxTicksLimit: 6,
-            color: "rgba(161,161,170,0.85)",
-            font: {
-              size: 10,
-            },
+            color: "rgba(255,255,255,0.6)",
           },
         },
         y: {
           grid: {
-            color: "rgba(39,39,42,0.8)",
+            color: "rgba(255,255,255,0.06)",
           },
           ticks: {
-            color: "rgba(161,161,170,0.85)",
-            font: {
-              size: 10,
-            },
+            color: "rgba(255,255,255,0.6)",
+            callback: (value) =>
+              typeof value === "number"
+                ? value.toLocaleString(undefined, {
+                    maximumFractionDigits: 0,
+                  })
+                : value,
           },
         },
       },
+      elements: {
+        point: {
+          hitRadius: 8,
+        },
+      },
     }),
-    [filteredHistory],
+    []
   );
 
-  const activeWindowLabel =
-    windowKey === "all"
-      ? "Viewing full available history."
-      : windowKey === "90d"
-      ? "Viewing last 90 days."
-      : "Viewing last 365 days.";
+  const overrideCount = data?.overrides?.length ?? 0;
 
   return (
-    <section className="rounded-3xl border border-zinc-800 bg-black/40 px-6 py-5 shadow-lg shadow-black/60">
-      <header className="mb-4 flex items-start justify-between gap-4">
+    <section className="flex flex-col gap-3 rounded-2xl border border-zinc-800 bg-black/40 px-5 pb-4 pt-4">
+      <div className="flex items-center justify-between gap-3">
         <div>
-          <p className="text-[11px] font-medium tracking-[0.18em] text-emerald-400">
-            ADMIN ANALYTICS
-          </p>
-          <h2 className="mt-1 text-sm font-semibold text-zinc-50">
+          <h3 className="text-sm font-semibold tracking-wide text-zinc-200">
+            Admin analytics
+          </h3>
+          <p className="mt-1 text-xs text-zinc-500">
             Volatility and anchor-pair history for USD/SSP, using live engine
             data.
-          </h2>
-          <p className="mt-1 text-[11px] text-zinc-500">
-            {activeWindowLabel}{" "}
-            {windowRangeLabel && (
-              <span className="text-zinc-400">({windowRangeLabel})</span>
-            )}
           </p>
-          {fullStartDate && fullEndDate && (
-            <p className="mt-0.5 text-[10px] text-zinc-500">
-              Full dataset: {formatRange(fullStartDate, fullEndDate)}
-            </p>
-          )}
         </div>
 
-        <div className="flex flex-col items-end gap-2">
-          {/* Pair selector (only one for now, but ready for future pairs) */}
-          <div className="inline-flex rounded-full border border-zinc-700 bg-black/60 p-0.5">
-            {PAIR_OPTIONS.map((pair) => (
+        {/* Window selector */}
+        <div className="inline-flex items-center gap-1 rounded-full bg-zinc-900/70 p-1 text-[11px]">
+          {WINDOW_OPTIONS.map((w) => {
+            const isActive = activeWindow === w;
+            return (
               <button
-                key={pair.key}
+                key={w}
                 type="button"
-                onClick={() => setActivePairKey(pair.key)}
-                className={`rounded-full px-3 py-1 text-[11px] font-medium transition ${
-                  activePairKey === pair.key
-                    ? "bg-zinc-100 text-black"
-                    : "text-zinc-400 hover:text-zinc-100"
-                }`}
+                onClick={() => setActiveWindow(w)}
+                className={[
+                  "rounded-full px-3 py-1 transition",
+                  isActive
+                    ? "bg-emerald-500 text-black shadow-sm"
+                    : "text-zinc-400 hover:text-zinc-100",
+                ].join(" ")}
               >
-                {pair.label}
+                {formatWindowLabel(w)}
               </button>
-            ))}
-          </div>
-
-          {/* Window selector */}
-          <div className="inline-flex rounded-full border border-zinc-700 bg-black/60 p-0.5">
-            {WINDOW_OPTIONS.map((w) => (
-              <button
-                key={w.key}
-                type="button"
-                onClick={() => setWindowKey(w.key)}
-                className={`rounded-full px-2.5 py-1 text-[11px] font-medium transition ${
-                  windowKey === w.key
-                    ? "bg-zinc-100 text-black"
-                    : "text-zinc-400 hover:text-zinc-100"
-                }`}
-              >
-                {w.label}
-              </button>
-            ))}
-          </div>
+            );
+          })}
         </div>
-      </header>
+      </div>
 
-      <div className="mt-3 h-56 w-full overflow-hidden rounded-2xl border border-zinc-800 bg-gradient-to-b from-zinc-900/80 to-black/80 px-3 pb-3 pt-2">
-        {loading ? (
-          <div className="flex h-full items-center justify-center text-[11px] text-zinc-500">
-            Loading history…
+      <div className="mt-2 h-56 w-full overflow-hidden rounded-xl border border-zinc-800 bg-zinc-950/80 px-3 py-2">
+        {loading && (
+          <div className="flex h-full items-center justify-center text-xs text-zinc-500">
+            Loading {formatWindowLabel(activeWindow)} history…
           </div>
-        ) : error ? (
-          <div className="flex h-full items-center justify-center text-[11px] text-red-400">
+        )}
+
+        {!loading && error && (
+          <div className="flex h-full items-center justify-center text-xs text-red-400">
             {error}
           </div>
-        ) : !filteredHistory.length ? (
-          <div className="flex h-full items-center justify-center text-[11px] text-zinc-500">
-            No history available for this pair yet.
-          </div>
-        ) : (
+        )}
+
+        {!loading && !error && chartData && (
           <Line data={chartData} options={chartOptions} />
+        )}
+
+        {!loading && !error && !chartData && (
+          <div className="flex h-full items-center justify-center text-xs text-zinc-500">
+            No data available for this window.
+          </div>
         )}
       </div>
 
-      {/* Footnote */}
       <p className="mt-3 text-[11px] leading-relaxed text-zinc-500">
         In this window, the system has{" "}
-        <span className="font-semibold text-zinc-300">{overrideCount}</span>{" "}
+          <span className="font-semibold text-zinc-300">{overrideCount}</span>{" "}
         manual {activePairLabel} overrides captured in{" "}
         <span className="font-mono text-zinc-400">manual_fixings</span>. Days
         with overrides are highlighted as amber markers on the chart so you can
