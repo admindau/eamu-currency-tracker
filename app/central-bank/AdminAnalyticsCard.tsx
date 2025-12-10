@@ -132,9 +132,12 @@ export default function AdminAnalyticsCard() {
           window: windowKey,
         });
 
-        const res = await fetch(`/api/admin/anchor-history?${params.toString()}`, {
-          cache: "no-store",
-        });
+        const res = await fetch(
+          `/api/admin/anchor-history?${params.toString()}`,
+          {
+            cache: "no-store",
+          },
+        );
 
         if (!res.ok) {
           const body = await res.json().catch(() => ({}));
@@ -166,11 +169,16 @@ export default function AdminAnalyticsCard() {
   }, [pairKey, windowKey]);
 
   const chartData = useMemo(() => {
-    if (!data || !data.history.length) {
+    if (!data || !data.history || !data.history.length) {
       return null;
     }
 
-    const labels = data.history.map((p) => p.date);
+    // Ensure chronological order: oldest → newest
+    const sortedHistory = [...data.history].sort((a, b) =>
+      a.date < b.date ? -1 : a.date > b.date ? 1 : 0,
+    );
+
+    const labels = sortedHistory.map((p) => p.date);
 
     // Map overrides by date so we can align with the history series
     const overridesByDate = new Map<string, number>();
@@ -178,7 +186,7 @@ export default function AdminAnalyticsCard() {
       overridesByDate.set(o.date, o.mid);
     });
 
-    const overrideSeries = data.history.map((p) => {
+    const overrideSeries = sortedHistory.map((p) => {
       const v = overridesByDate.get(p.date);
       return typeof v === "number" ? v : NaN;
     });
@@ -188,7 +196,7 @@ export default function AdminAnalyticsCard() {
       datasets: [
         {
           label: "Mid rate",
-          data: data.history.map((p) => p.mid),
+          data: sortedHistory.map((p) => p.mid),
           borderColor: "rgba(52, 211, 153, 1)", // emerald-400
           backgroundColor: "rgba(16, 185, 129, 0.15)",
           tension: 0.25,
@@ -226,7 +234,10 @@ export default function AdminAnalyticsCard() {
             Volatility and anchor-pair history using live engine data.
           </h2>
           <p className="text-[11px] text-zinc-500">
-            Viewing {windowKey === "all" ? "full available history" : `last ${windowKey}`}.
+            Viewing{" "}
+            {windowKey === "all"
+              ? "full available history"
+              : `last ${windowKey}`}.
           </p>
         </div>
 
@@ -300,9 +311,9 @@ export default function AdminAnalyticsCard() {
         In this window, the system has{" "}
         <span className="font-semibold text-zinc-300">{overrideCount}</span>{" "}
         manual {activePairLabel} overrides captured in{" "}
-        <span className="font-mono text-zinc-400">manual_fixings</span>. Days with
-        overrides are highlighted as amber markers on the chart so you can see
-        where policy actions intersect with market moves.
+        <span className="font-mono text-zinc-400">manual_fixings</span>. Days
+        with overrides are highlighted as amber markers on the chart so you can
+        see where policy actions intersect with market moves.
       </p>
     </section>
   );
