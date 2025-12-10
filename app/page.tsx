@@ -581,11 +581,12 @@ export default async function HomePage() {
             {/* Call-to-actions */}
             <div className="flex flex-wrap items-center gap-3">
               <Link
-                href="/api"
+                href="/docs#quick-start"
                 className="rounded-full bg-white text-black px-4 py-2 text-sm font-medium hover:bg-zinc-200 transition"
               >
                 Get started with the API
               </Link>
+
               <Link
                 href="#recent"
                 className="rounded-full border border-zinc-700 px-4 py-2 text-sm font-medium hover:bg-zinc-900 transition"
