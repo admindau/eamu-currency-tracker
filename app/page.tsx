@@ -368,19 +368,76 @@ export default async function HomePage() {
     summary?.as_of_date ??
     (recentRows.length > 0 ? recentRows[0].as_of_date : null);
 
-  const eamuRates = EAMU_COUNTRIES.map((country) => {
-    const match = recentRows.find(
-      (row) =>
-        row.base_currency === "SSP" && row.quote_currency === country.code
+  // Build per-pair history from recent rows for EAMU quotes
+  const eamuCodeSet = new Set(EAMU_COUNTRIES.map((c) => c.code));
+
+  const perPair: Record<string, RecentRate[]> = {};
+
+  for (const row of recentRows) {
+    if (row.base_currency !== "SSP") continue;
+    if (!eamuCodeSet.has(row.quote_currency)) continue;
+
+    if (!perPair[row.quote_currency]) {
+      perPair[row.quote_currency] = [];
+    }
+    perPair[row.quote_currency].push(row);
+  }
+
+  // Sort each pair's history by date descending (latest first)
+  for (const code of Object.keys(perPair)) {
+    perPair[code].sort((a, b) =>
+      a.as_of_date < b.as_of_date ? 1 : a.as_of_date > b.as_of_date ? -1 : 0
     );
+  }
+
+  const eamuRates = EAMU_COUNTRIES.map((country) => {
+    const historyRows = perPair[country.code] ?? [];
+    const latestRow = historyRows[0];
+    const previousRow = historyRows[1];
+
+    const latestRate = latestRow?.rate_mid ?? null;
+    const previousRate = previousRow?.rate_mid ?? null;
+
+    let changePct: number | null = null;
+    if (
+      typeof latestRate === "number" &&
+      typeof previousRate === "number" &&
+      previousRate !== 0
+    ) {
+      changePct = (latestRate - previousRate) / previousRate;
+    }
+
+    // sparkline history: up to last 7 mid rates, oldest -> newest
+    const history =
+      historyRows.length > 0
+        ? historyRows
+            .slice(0, 7)
+            .map((row) => row.rate_mid)
+            .reverse()
+        : undefined;
+
+    let sourceLabel: string | null = null;
+    if (latestRow) {
+      if (latestRow.is_official) {
+        sourceLabel = "Official fixing";
+      } else if (latestRow.is_manual_override) {
+        sourceLabel = "Manual override";
+      } else {
+        sourceLabel = "Savvy Rilla FX – public read-only";
+      }
+    }
 
     return {
       code: country.code,
       name: country.name,
       flag: country.flag,
-      rate: match ? match.rate_mid : null,
+      rate: latestRate,
+      changePct,
+      history,
+      sourceLabel,
     };
   });
+
 
   return (
     <main className="min-h-screen bg-black text-zinc-100">
