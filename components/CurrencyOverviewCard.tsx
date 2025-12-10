@@ -44,6 +44,50 @@ const WINDOW_LABELS: Record<WindowKey, string> = {
   all: "Full history",
 };
 
+/**
+ * Simple client-side per-pair commentary generator.
+ * Uses latest rate + day-on-day percentage change and current window.
+ */
+function buildPerPairCommentary(
+  rate: EamuRate,
+  baseLabel: string,
+  windowLabel: string
+): string {
+  if (rate.rate === null || rate.rate === undefined) {
+    return `There is no recent fixing available for ${rate.code}/${baseLabel}. Once a new official rate is published, this section will summarise the latest move.`;
+  }
+
+  const pct = rate.changePct ?? null;
+  const formattedRate = rate.rate.toLocaleString();
+
+  if (pct === null || pct === undefined) {
+    return `${rate.name} (${rate.code}/${baseLabel}) is currently fixing around ${formattedRate}. No recent day-on-day change has been recorded, so the pair is being treated as broadly steady over the ${windowLabel.toLowerCase()}.`;
+  }
+
+  const absPct = Math.abs(pct);
+  const direction =
+    pct > 0 ? "strengthened" : pct < 0 ? "weakened" : "been broadly flat";
+
+  if (absPct < 0.05) {
+    return `${rate.name} (${rate.code}/${baseLabel}) is fixing at ${formattedRate} and has been broadly flat versus ${baseLabel}, with less than ±0.05% change since the previous fixing. Price action over the ${windowLabel.toLowerCase()} has been very muted.`;
+  }
+
+  if (pct > 0) {
+    return `${rate.name} (${rate.code}/${baseLabel}) is fixing at ${formattedRate} and has ${direction} by ${pct.toFixed(
+      2
+    )}% versus ${baseLabel} since the previous fixing. Over the ${windowLabel.toLowerCase()}, this points to a modest appreciation bias.`;
+  }
+
+  if (pct < 0) {
+    return `${rate.name} (${rate.code}/${baseLabel}) is fixing at ${formattedRate} and has ${direction} by ${absPct.toFixed(
+      2
+    )}% versus ${baseLabel} since the previous fixing. Over the ${windowLabel.toLowerCase()}, this suggests a mild depreciation trend.`;
+  }
+
+  // pct === 0 explicitly
+  return `${rate.name} (${rate.code}/${baseLabel}) is fixing at ${formattedRate} with no day-on-day change versus ${baseLabel}. The pair is trading sideways over the ${windowLabel.toLowerCase()}.`;
+}
+
 export function CurrencyOverviewCard({
   commentary,
   eamuRates,
@@ -58,6 +102,14 @@ export function CurrencyOverviewCard({
     () => eamuRates.find((r) => r.code === selectedCode) || null,
     [eamuRates, selectedCode]
   );
+
+  const baseLabel = latestBase ?? "SSP";
+
+  const perPairCommentary = useMemo(() => {
+    if (!selectedRate) return null;
+    const windowLabel = WINDOW_LABELS[windowKey];
+    return buildPerPairCommentary(selectedRate, baseLabel, windowLabel);
+  }, [selectedRate, baseLabel, windowKey]);
 
   // Sort so:
   // 1) KES always first
@@ -108,7 +160,7 @@ export function CurrencyOverviewCard({
           </p>
           <h2 className="text-xl sm:text-2xl md:text-3xl font-semibold text-neutral-50">
             High-level view of EAMU and related currencies, anchored on{" "}
-            {latestBase ?? "SSP"}.
+            {baseLabel}.
           </h2>
 
           {latestDate && (
@@ -140,8 +192,7 @@ export function CurrencyOverviewCard({
                 CURRENCY SNAPSHOT
               </p>
               <p className="text-sm text-neutral-300">
-                EAMU basket vs{" "}
-                <span className="font-medium">{latestBase}</span>
+                EAMU basket vs <span className="font-medium">{baseLabel}</span>
               </p>
             </div>
 
@@ -188,7 +239,7 @@ export function CurrencyOverviewCard({
                           {rate.flag}
                         </div>
                         <p className="text-[11px] tracking-[0.18em] uppercase text-neutral-500">
-                          {rate.code} / {latestBase}
+                          {rate.code} / {baseLabel}
                         </p>
                       </div>
                       <p className="text-sm font-medium text-neutral-100 leading-tight">
@@ -237,7 +288,7 @@ export function CurrencyOverviewCard({
                   <div className="mt-3">
                     <div className="relative h-8 w-full overflow-hidden rounded-full bg-neutral-950/90 border border-neutral-900/80">
                       <FxHistoryChart
-                        base={latestBase ?? "SSP"}
+                        base={baseLabel}
                         quote={rate.code}
                         window={windowKey}
                       />
@@ -256,7 +307,7 @@ export function CurrencyOverviewCard({
         <div className="bg-[#050507] border border-neutral-900 rounded-3xl px-4 sm:px-5 py-4 sm:py-5 shadow-[0_40px_120px_rgba(0,0,0,0.7)] flex flex-col justify-between">
           <div className="space-y-2">
             <p className="text-[10px] uppercase tracking-[0.2em] text-neutral-500">
-              REGIONAL CURRENCIES ANCHORED ON {latestBase ?? "SSP"}
+              REGIONAL CURRENCIES ANCHORED ON {baseLabel}
             </p>
             <h3 className="text-sm sm:text-base font-medium text-neutral-50">
               Compact view of the EAMU basket for policy and dealing desks that
@@ -264,7 +315,7 @@ export function CurrencyOverviewCard({
             </h3>
             <p className="text-xs text-neutral-400 leading-relaxed">
               Snapshot for desks that need a concise, comparable view of the
-              EAMU basket against {latestBase ?? "SSP"}.
+              EAMU basket against {baseLabel}.
             </p>
           </div>
 
@@ -326,8 +377,7 @@ export function CurrencyOverviewCard({
                     CURRENCY DETAIL
                   </p>
                   <h4 className="text-sm sm:text-base font-semibold text-neutral-50">
-                    {selectedRate.name} • {selectedRate.code} /{" "}
-                    {latestBase ?? "SSP"}
+                    {selectedRate.name} • {selectedRate.code} / {baseLabel}
                   </h4>
                   <p className="text-[11px] text-neutral-400">
                     {WINDOW_LABELS[windowKey]} • Tap on the sparkline to inspect
@@ -380,11 +430,22 @@ export function CurrencyOverviewCard({
 
                 <div className="h-40 sm:h-52 rounded-2xl bg-neutral-950/80 border border-neutral-900/80 overflow-hidden">
                   <FxHistoryChart
-                    base={latestBase ?? "SSP"}
+                    base={baseLabel}
                     quote={selectedRate.code}
                     window={windowKey}
                   />
                 </div>
+
+                {perPairCommentary && (
+                  <div className="space-y-1">
+                    <p className="text-[10px] uppercase tracking-[0.18em] text-neutral-500">
+                      PAIR COMMENTARY
+                    </p>
+                    <p className="text-[11px] text-neutral-300 leading-relaxed">
+                      {perPairCommentary}
+                    </p>
+                  </div>
+                )}
 
                 {selectedRate.sourceLabel && (
                   <p className="text-[11px] text-neutral-500 leading-relaxed">
