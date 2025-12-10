@@ -120,15 +120,26 @@ export default function FxHistoryChart(props: Props) {
   // COMPACT MODE (cards)
   // -------------------------------
   if (variant === "compact") {
-    // If loading, error, or not enough points → neutral placeholder bar
+    // Skeleton while loading or before data lands
     if (
-      loading ||
+      loading &&
+      (!activeSeries || !activeSeries.points || activeSeries.points.length < 2)
+    ) {
+      return (
+        <div className="h-full w-full rounded-full bg-gradient-to-r from-neutral-900/80 via-neutral-800/40 to-neutral-900/80 animate-pulse" />
+      );
+    }
+
+    // If error or still not enough points after load → neutral placeholder bar
+    if (
       fetchError ||
       !activeSeries ||
       !activeSeries.points ||
       activeSeries.points.length < 2
     ) {
-      return <div className="w-full h-full bg-neutral-900/60" />;
+      return (
+        <div className="h-full w-full rounded-full bg-neutral-900/60" />
+      );
     }
 
     const points = activeSeries.points;
@@ -161,7 +172,7 @@ export default function FxHistoryChart(props: Props) {
     return (
       <svg
         viewBox={`0 0 ${width} ${height}`}
-        className="w-full h-full"
+        className="h-full w-full"
         aria-hidden="true"
       >
         <defs>
@@ -215,10 +226,16 @@ export default function FxHistoryChart(props: Props) {
   // -------------------------------
 
   if (!activeSeries || !activeSeries.points || activeSeries.points.length < 2) {
+    // Skeleton while loading and nothing to show yet
     if (loading && series.length === 0) {
       return (
-        <div className="mt-3 rounded-xl border border-zinc-900 bg-zinc-950 px-3 py-2 text-[0.75rem] text-zinc-500">
-          Loading history…
+        <div className="mt-3 rounded-2xl border border-zinc-900 bg-zinc-950/80 p-4">
+          <div className="h-40 w-full rounded-xl bg-gradient-to-r from-zinc-900/80 via-zinc-800/40 to-zinc-900/80 animate-pulse" />
+          <div className="mt-2 flex justify-between text-[0.6rem] text-zinc-600">
+            <span className="h-3 w-10 rounded bg-zinc-900/60 animate-pulse" />
+            <span className="h-3 w-16 rounded bg-zinc-900/60 animate-pulse" />
+            <span className="h-3 w-10 rounded bg-zinc-900/60 animate-pulse" />
+          </div>
         </div>
       );
     }
@@ -329,7 +346,7 @@ export default function FxHistoryChart(props: Props) {
       {series.length > 1 && (
         <div className="flex items-center justify-between gap-2 text-[0.7rem]">
           <p className="text-zinc-400">USD/SSP history</p>
-          <div className="inline-flex items-center gap-1 rounded-full bg-zinc-950 p-1 border border-zinc-800">
+          <div className="inline-flex items-center gap-1 rounded-full border border-zinc-800 bg-zinc-950 p-1">
             {series.map((s) => {
               const isActive = s.label === activeLabel;
               return (
