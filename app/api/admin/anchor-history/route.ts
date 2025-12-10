@@ -9,47 +9,48 @@ const WINDOW_TO_DAYS: Record<Exclude<WindowKey, "all">, number> = {
   "365d": 365,
 };
 
-// Anchor pair is SSP as base, USD as quote
+// Anchor pair is SSP as base, USD as quote by default
 const DEFAULT_PAIR = "SSPUSD";
 
 export async function GET(req: NextRequest) {
   try {
-    // supabaseServer is already a configured client (do NOT call it)
+    // NOTE: supabaseServer is already a client, do NOT call it
     const supabase = supabaseServer;
 
-    // ============================
-    // 1. Parse URL params
-    // ============================
-    const url = new URL(req.url);
-    const searchParams = url.searchParams;
+    const { searchParams } = new URL(req.url);
+    const rawWindow = (searchParams.get("window") ?? "365d") as string;
+    const rawPair = (searchParams.get("pair") ?? DEFAULT_PAIR) as string;
 
-    const pairParamRaw = (searchParams.get("pair") || DEFAULT_PAIR).toUpperCase();
-    const windowParamRaw = (searchParams.get("window") || "365d").toLowerCase();
-
+    // validate window
     const windowParam: WindowKey = WINDOW_OPTIONS.includes(
-      windowParamRaw as WindowKey,
+      rawWindow as WindowKey,
     )
-      ? (windowParamRaw as WindowKey)
+      ? (rawWindow as WindowKey)
       : "365d";
 
-    const base_currency = pairParamRaw.slice(0, 3);
-    const quote_currency = pairParamRaw.slice(3);
+    // expect pairs like SSPUSD, SSPKES, etc.
+    const safePair =
+      /^[A-Z]{6}$/.test(rawPair) && rawPair.startsWith("SSP")
+        ? rawPair
+        : DEFAULT_PAIR;
 
-    // ============================
-    // 2. Date window
-    // ============================
+    const base_currency = safePair.slice(0, 3); // "SSP"
+    const quote_currency = safePair.slice(3); // "USD", "KES", etc.
+
+    // Compute sinceDate only for 90d / 365d.
+    // For "all" we leave sinceDate = null → no lower bound filter.
     let sinceDate: string | null = null;
-
     if (windowParam !== "all") {
-      const days = WINDOW_TO_DAYS[windowParam as Exclude<WindowKey, "all">];
-      const since = new Date();
-      since.setDate(since.getDate() - days);
-      sinceDate = since.toISOString().slice(0, 10); // YYYY-MM-DD
+      const daysBack = WINDOW_TO_DAYS[windowParam];
+      const d = new Date();
+      d.setUTCDate(d.getUTCDate() - daysBack);
+      sinceDate = d.toISOString().slice(0, 10); // YYYY-MM-DD
     }
 
-    // ============================
-    // 3. Engine history from fx_daily_rates_default
-    // ============================
+    // =====================================================
+    // 1) Engine history from fx_daily_rates_default
+    // =====================================================
+
     let ratesQuery = supabase
       .from("fx_daily_rates_default")
       .select(
@@ -57,8 +58,7 @@ export async function GET(req: NextRequest) {
         as_of_date,
         base_currency,
         quote_currency,
-        rate_mid,
-        is_manual_override
+        rate_mid
       `,
       )
       .eq("base_currency", base_currency)
@@ -72,60 +72,63 @@ export async function GET(req: NextRequest) {
     const { data: engineRates, error: engineError } = await ratesQuery;
 
     if (engineError) {
-      console.error("Engine fetch error:", engineError);
+      console.error("Anchor history: engine fetch error", engineError);
       return NextResponse.json(
         { error: "Failed to fetch engine history" },
         { status: 500 },
       );
     }
 
-    // ============================
-    // 4. Manual overrides from manual_fixings
-    // ============================
-    let overrideQuery = supabase
+    const history =
+      engineRates?.map((row) => ({
+        date: String(row.as_of_date),
+        mid: Number((row as any).rate_mid ?? 0),
+      })) ?? [];
+
+    // Defensive: make sure it’s always oldest → newest
+    history.sort((a, b) => (a.date < b.date ? -1 : a.date > b.date ? 1 : 0));
+
+    // =====================================================
+    // 2) Manual overrides from manual_fixings
+    // =====================================================
+
+    let overridesQuery = supabase
       .from("manual_fixings")
       .select(
         `
-        as_of_date,
+        fixing_date,
         base_currency,
         quote_currency,
-        rate_mid,
-        created_at
+        rate_mid
       `,
       )
       .eq("base_currency", base_currency)
       .eq("quote_currency", quote_currency)
-      .order("as_of_date", { ascending: true });
+      .order("fixing_date", { ascending: true });
 
     if (sinceDate) {
-      overrideQuery = overrideQuery.gte("as_of_date", sinceDate);
+      overridesQuery = overridesQuery.gte("fixing_date", sinceDate);
     }
 
-    const { data: overrides, error: overrideError } = await overrideQuery;
+    const { data: overrideRows, error: overridesError } = await overridesQuery;
 
-    if (overrideError) {
-      console.error("Override fetch error:", overrideError);
+    if (overridesError) {
+      console.error("Anchor history: overrides fetch error", overridesError);
       return NextResponse.json(
         { error: "Failed to fetch overrides" },
         { status: 500 },
       );
     }
 
-    // ============================
-    // 5. Shape response for the chart
-    // ============================
-    const history = (engineRates ?? []).map((r) => ({
-      date: r.as_of_date as string,
-      mid: Number(r.rate_mid ?? 0),
-    }));
+    const overrideMarkers =
+      overrideRows?.map((o) => ({
+        date: String((o as any).fixing_date),
+        mid: Number((o as any).rate_mid ?? 0),
+      })) ?? [];
 
-    const overrideMarkers = (overrides ?? []).map((o) => ({
-      date: o.as_of_date as string,
-      mid: Number(o.rate_mid ?? 0),
-    }));
-
+    // Final payload consumed by AdminAnalyticsCard
     return NextResponse.json({
-      pair: pairParamRaw,
+      pair: safePair,
       window: windowParam,
       history,
       overrides: overrideMarkers,
