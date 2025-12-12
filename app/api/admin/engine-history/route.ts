@@ -2,13 +2,12 @@ import { NextRequest, NextResponse } from "next/server";
 import { createClient } from "@supabase/supabase-js";
 
 /**
- * Engine history source (locked)
- * This view/table is treated as the canonical FX engine output.
+ * Canonical source for engine history.
  */
 const ENGINE_HISTORY_SOURCE = "fx_daily_rates_default";
 
 /**
- * Supported windows (calendar days)
+ * Supported windows (calendar days).
  */
 const WINDOWS = ["15d", "30d", "90d", "365d", "all"] as const;
 type WindowKey = (typeof WINDOWS)[number];
@@ -23,13 +22,20 @@ const WINDOW_TO_DAYS: Record<Exclude<WindowKey, "all">, number> = {
 const DAY_MS = 24 * 60 * 60 * 1000;
 
 /**
- * Default display pair (UI)
- * UI displays as QUOTE/BASE (e.g., USD/SSP).
+ * Canonical UI pair convention:
+ *   Display always as XXX/SSP  (e.g., USD/SSP, KES/SSP)
+ *   Query param pair always as XXXSSP (e.g., USDSSP, KESSSP)
+ *
+ * Storage convention:
+ *   base_currency = SSP
+ *   quote_currency = XXX
+ *
+ * Therefore: display USD/SSP => storage base=SSP quote=USD
  */
-const DEFAULT_PAIR_DISPLAY = "USDSSP";
+const DEFAULT_PAIR_CANONICAL = "USDSSP";
 
 /**
- * Supabase admin client
+ * Supabase admin client.
  */
 function getSupabaseAdmin() {
   const url = process.env.NEXT_PUBLIC_SUPABASE_URL || process.env.SUPABASE_URL;
@@ -45,9 +51,6 @@ function getSupabaseAdmin() {
   });
 }
 
-/**
- * Helpers
- */
 function toUtcDateTs(date: string) {
   return new Date(`${date}T00:00:00Z`).getTime();
 }
@@ -56,52 +59,59 @@ function tsToDate(ts: number) {
   return new Date(ts).toISOString().slice(0, 10);
 }
 
-/**
- * IMPORTANT: Pair semantics
- *
- * UI displays pair as QUOTE/BASE (e.g., USD/SSP).
- * Storage is BASE/QUOTE (e.g., base_currency=SSP, quote_currency=USD).
- *
- * Therefore:
- * - Display "USDSSP" must map to storage base="SSP", quote="USD".
- * - In general, if SSP is present, SSP is the storage base (denominator).
- */
-function normalizePairDisplay(raw: string) {
+function normalizePair(raw: string) {
   const clean = raw.replace(/[^A-Za-z]/g, "").toUpperCase();
-  const left = clean.slice(0, 3) || "USD"; // display quote
-  const right = clean.slice(3, 6) || "SSP"; // display base
-  return { left, right, displayValue: `${left}${right}` };
+  const a = clean.slice(0, 3);
+  const b = clean.slice(3, 6);
+  return { a, b, clean };
 }
 
-function mapDisplayPairToStorage(displayValue: string) {
-  const { left, right } = normalizePairDisplay(displayValue);
-
-  // If display is USD/SSP => left=USD, right=SSP => storage base=SSP, quote=USD
-  if (right === "SSP") {
-    return { base: "SSP", quote: left, displayValue: `${left}${right}` };
+/**
+ * Canonicalize any incoming pair so that:
+ * - Returned pair is always XXXSSP
+ * - Returned label is always XXX/SSP
+ * - Returned storage mapping is always base=SSP, quote=XXX
+ *
+ * Examples:
+ *  - "USDSSP" => canonical USDSSP, storage base=SSP quote=USD
+ *  - "SSPUSD" => canonical USDSSP, storage base=SSP quote=USD
+ */
+function canonicalizeToQuoteOverSSP(rawPair: string) {
+  const { a, b } = normalizePair(rawPair || "");
+  // If one side is SSP, the other side is the quote currency
+  if (a === "SSP" && b) {
+    const quote = b;
+    return {
+      canonicalPair: `${quote}SSP`,
+      label: `${quote}/SSP`,
+      storagePair: { base: "SSP", quote },
+    };
+  }
+  if (b === "SSP" && a) {
+    const quote = a;
+    return {
+      canonicalPair: `${quote}SSP`,
+      label: `${quote}/SSP`,
+      storagePair: { base: "SSP", quote },
+    };
   }
 
-  // If display is SSP/USD (rare in UI, but handle) => right=USD, left=SSP
-  // storage would still be base=SSP, quote=USD (consistent with model)
-  if (left === "SSP") {
-    return { base: "SSP", quote: right, displayValue: `${left}${right}` };
-  }
-
-  // Fallback for non-SSP pairs (future-proofing)
-  return { base: right, quote: left, displayValue: `${left}${right}` };
-}
-
-function pairLabelForDisplay(displayValue: string) {
-  const { left, right } = normalizePairDisplay(displayValue);
-  // Display label shown in UI: QUOTE/BASE
-  return `${left}/${right}`;
+  // Fallback: if SSP is not present, we cannot guarantee meaning.
+  // We will treat "a/b" as quote/base display and invert into storage.
+  // (If your product will never support non-SSP denominators, you can remove this.)
+  const quote = a || "USD";
+  return {
+    canonicalPair: `${quote}SSP`,
+    label: `${quote}/SSP`,
+    storagePair: { base: "SSP", quote },
+  };
 }
 
 /**
  * GET /api/admin/engine-history
  * Query params:
  * - window: 15d | 30d | 90d | 365d | all
- * - pair: display pair e.g. "USDSSP", "KESSSP"
+ * - pair: canonical XXXSSP preferred (e.g., USDSSP), but SSPUSD also accepted
  */
 export async function GET(req: NextRequest) {
   try {
@@ -112,21 +122,23 @@ export async function GET(req: NextRequest) {
       ? (rawWindow as WindowKey)
       : "90d";
 
-    const rawPair = (url.searchParams.get("pair") ?? DEFAULT_PAIR_DISPLAY).toUpperCase();
-    const { base, quote, displayValue } = mapDisplayPairToStorage(rawPair);
+    const incomingPair = (url.searchParams.get("pair") ?? DEFAULT_PAIR_CANONICAL).toUpperCase();
+    const canon = canonicalizeToQuoteOverSSP(incomingPair);
+
+    const canonicalPair = canon.canonicalPair; // e.g. USDSSP
+    const label = canon.label; // e.g. USD/SSP
+    const { base, quote } = canon.storagePair; // storage: base=SSP, quote=USD
 
     const supabase = getSupabaseAdmin();
 
     /**
      * Build selector pairs list from engine source.
-     * We will emit *display pairs* (QUOTE/BASE), consistent with the UI.
-     *
-     * Storage rows: base_currency (BASE), quote_currency (QUOTE)
-     * Display: QUOTE/BASE
+     * Only expose canonical XXX/SSP.
      */
     const pairsRes = await supabase
       .from(ENGINE_HISTORY_SOURCE)
       .select("base_currency, quote_currency")
+      .eq("base_currency", "SSP")
       .limit(5000);
 
     if (pairsRes.error) {
@@ -135,33 +147,32 @@ export async function GET(req: NextRequest) {
 
     const pairSet = new Set<string>();
     for (const r of pairsRes.data ?? []) {
-      const b = String(r.base_currency).toUpperCase();
-      const q = String(r.quote_currency).toUpperCase();
+      const b = String(r.base_currency).toUpperCase(); // SSP
+      const q = String(r.quote_currency).toUpperCase(); // USD, EUR, etc.
       if (!b || !q) continue;
+      if (b !== "SSP") continue;
 
-      // display value is QUOTE+BASE (e.g., USDSSP)
-      const display = `${q}${b}`;
-      pairSet.add(display);
+      // canonical display pair value: QUOTE+SSP
+      pairSet.add(`${q}SSP`);
     }
 
-    // Ensure requested pair always exists in selector
-    pairSet.add(displayValue);
+    // Ensure current selection exists
+    pairSet.add(canonicalPair);
 
     const pairs = Array.from(pairSet)
       .map((val) => {
-        const { left, right } = normalizePairDisplay(val);
+        const { a, b } = normalizePair(val); // a=USD, b=SSP
         return {
           value: val,
-          // keep these fields for UI convenience
-          base: right, // display base (denominator)
-          quote: left, // display quote (numerator)
-          label: `${left}/${right}`,
+          base: b,  // SSP
+          quote: a, // USD
+          label: `${a}/${b}`,
         };
       })
-      .sort((a, b) => a.label.localeCompare(b.label));
+      .sort((x, y) => x.label.localeCompare(y.label));
 
     /**
-     * Determine RAW max date for the *storage pair* (base/quote)
+     * Determine RAW max date for the storage pair.
      */
     const latestRes = await supabase
       .from(ENGINE_HISTORY_SOURCE)
@@ -175,7 +186,8 @@ export async function GET(req: NextRequest) {
       return NextResponse.json(
         {
           error: "No engine history found for this pair.",
-          pair: displayValue,
+          pair: canonicalPair,
+          label,
           storagePair: { base, quote },
           source: ENGINE_HISTORY_SOURCE,
         },
@@ -187,7 +199,7 @@ export async function GET(req: NextRequest) {
     const rawMaxTs = toUtcDateTs(rawMaxDate);
 
     /**
-     * Determine window minimum date (calendar-based)
+     * Determine window minimum date (calendar-based).
      */
     let windowMinDate: string;
 
@@ -212,9 +224,13 @@ export async function GET(req: NextRequest) {
     }
 
     /**
-     * Fetch history rows for the window, for the *storage pair*
+     * Fetch history rows.
+     *
+     * CRITICAL FIX:
+     * For window=all, PostgREST may return only the first page (often 1000 rows).
+     * We explicitly request a large range to avoid truncation.
      */
-    const historyRes = await supabase
+    let historyQuery = supabase
       .from(ENGINE_HISTORY_SOURCE)
       .select("as_of_date, rate_mid")
       .eq("base_currency", base)
@@ -222,6 +238,13 @@ export async function GET(req: NextRequest) {
       .gte("as_of_date", windowMinDate)
       .lte("as_of_date", rawMaxDate)
       .order("as_of_date", { ascending: true });
+
+    if (window === "all") {
+      // Your dataset is ~1.2k rows, so 5000 is safe and avoids the 1000-row default cap.
+      historyQuery = historyQuery.range(0, 5000);
+    }
+
+    const historyRes = await historyQuery;
 
     if (historyRes.error) {
       return NextResponse.json({ error: historyRes.error.message }, { status: 500 });
@@ -241,8 +264,8 @@ export async function GET(req: NextRequest) {
       }));
 
     /**
-     * FIX A:
-     * Return minDate/maxDate based on the SAME FILTERED dataset used for plotting
+     * FIX A (still applies):
+     * min/max should reflect plotted dataset, not raw dataset.
      */
     const minDate = history.length ? history[0].date : windowMinDate;
     const maxDate = history.length ? history[history.length - 1].date : rawMaxDate;
@@ -251,18 +274,14 @@ export async function GET(req: NextRequest) {
       source: ENGINE_HISTORY_SOURCE,
       window,
 
-      // UI/display pair value (QUOTE+BASE), e.g. USDSSP
-      pair: displayValue,
-      label: pairLabelForDisplay(displayValue),
+      pair: canonicalPair,
+      label,
 
-      // storage mapping (BASE/QUOTE)
       storagePair: { base, quote },
 
-      // plotted range (honest)
       minDate,
       maxDate,
 
-      // diagnostics
       rawMinDate: windowMinDate,
       rawMaxDate,
 
