@@ -1,30 +1,6 @@
 "use client";
 
-import React, { useEffect, useMemo, useRef, useState } from "react";
-import { Line } from "react-chartjs-2";
-import {
-  Chart as ChartJS,
-  LineElement,
-  PointElement,
-  CategoryScale,
-  LinearScale,
-  Tooltip,
-  Legend,
-  Filler,
-  type ChartOptions,
-} from "chart.js";
-import zoomPlugin from "chartjs-plugin-zoom";
-
-ChartJS.register(
-  LineElement,
-  PointElement,
-  CategoryScale,
-  LinearScale,
-  Tooltip,
-  Legend,
-  Filler,
-  zoomPlugin
-);
+import React, { useEffect, useMemo, useState } from "react";
 
 const WINDOWS = ["15d", "30d", "90d", "365d", "all"] as const;
 type WindowKey = (typeof WINDOWS)[number];
@@ -33,301 +9,249 @@ type PairOption = {
   base: string;
   quote: string;
   label: string; // e.g. "USD/SSP"
-  value: string; // e.g. "SSPUSD" (base+quote)
+  value: string; // e.g. "USDSSP" (storagePairKey)
 };
 
 type HistoryPoint = { date: string; mid: number };
 
 type EngineHistoryResponse = {
-  source: string; // detected table/view name
-  window: WindowKey;
-  pair: string; // base+quote, e.g. "SSPUSD"
-  minDate: string;
-  maxDate: string;
-  pairs: PairOption[];
-  history: HistoryPoint[];
+  source?: string;
+  window: string;
+  pair: string;
+  label?: string;
+  storagePair?: { base: string; quote: string };
+  minDate?: string;
+  maxDate?: string;
+  rawMinDate?: string;
+  rawMaxDate?: string;
+  pairs?: PairOption[];
+  history?: HistoryPoint[];
 };
 
-function formatWindowLabel(key: WindowKey) {
-  if (key === "all") return "All";
-  return key;
+function cn(...classes: Array<string | false | null | undefined>) {
+  return classes.filter(Boolean).join(" ");
 }
 
-function toPairLabel(base: string, quote: string) {
-  // UX label: quote/base (USD/SSP)
-  return `${quote}/${base}`;
+function formatNumber(n: number) {
+  if (!Number.isFinite(n)) return "—";
+  return n.toLocaleString(undefined, { maximumFractionDigits: 4 });
 }
 
-function safeDateRange(minDate?: string, maxDate?: string) {
-  if (!minDate || !maxDate) return "";
-  if (minDate === maxDate) return minDate;
-  return `${minDate} → ${maxDate}`;
+function buildPath(points: Array<{ x: number; y: number }>) {
+  if (points.length === 0) return "";
+  let d = `M ${points[0].x} ${points[0].y}`;
+  for (let i = 1; i < points.length; i++) d += ` L ${points[i].x} ${points[i].y}`;
+  return d;
+}
+
+function buildAreaPath(points: Array<{ x: number; y: number }>, height: number, bottomY: number) {
+  if (points.length === 0) return "";
+  const line = buildPath(points);
+  const last = points[points.length - 1];
+  const first = points[0];
+  // Close area to baseline
+  return `${line} L ${last.x} ${bottomY} L ${first.x} ${bottomY} Z`;
 }
 
 export default function EngineHistoryChartCard() {
-  const chartRef = useRef<any>(null);
-
-  const [activeWindow, setActiveWindow] = useState<WindowKey>("90d");
-  const [activePair, setActivePair] = useState<string>("SSPUSD"); // base+quote
-  const [data, setData] = useState<EngineHistoryResponse | null>(null);
-  const [pairs, setPairs] = useState<PairOption[]>([]);
-  const [loading, setLoading] = useState(false);
+  const [activePair, setActivePair] = useState<string>("USDSSP");
+  const [windowKey, setWindowKey] = useState<WindowKey>("all");
+  const [resp, setResp] = useState<EngineHistoryResponse | null>(null);
+  const [loading, setLoading] = useState<boolean>(false);
   const [error, setError] = useState<string | null>(null);
 
-  // Fetch data
   useEffect(() => {
     let cancelled = false;
 
-    async function load() {
+    async function run() {
       setLoading(true);
       setError(null);
-
       try {
-        const res = await fetch(
-          `/api/admin/engine-history?window=${encodeURIComponent(
-            activeWindow
-          )}&pair=${encodeURIComponent(activePair)}`,
-          { method: "GET", cache: "no-store" }
-        );
-
-        const body = await res.json().catch(() => ({}));
-
-        if (!res.ok) {
-          throw new Error(body?.error || `Request failed (${res.status})`);
-        }
-
-        if (!cancelled) {
-          const parsed = body as EngineHistoryResponse;
-          setData(parsed);
-          setPairs(parsed.pairs ?? []);
-        }
+        const url = `/api/engine-history?window=${encodeURIComponent(windowKey)}&pair=${encodeURIComponent(
+          activePair
+        )}`;
+        const r = await fetch(url, { method: "GET" });
+        if (!r.ok) throw new Error(`HTTP ${r.status}`);
+        const j = (await r.json()) as EngineHistoryResponse;
+        if (cancelled) return;
+        setResp(j);
       } catch (e: any) {
-        console.error("Engine history chart load failed:", e);
-        if (!cancelled) {
-          setError(e?.message || "Failed to load engine history");
-          setData(null);
-        }
+        if (cancelled) return;
+        setResp(null);
+        setError(e?.message ?? "Failed to load history");
       } finally {
         if (!cancelled) setLoading(false);
       }
     }
 
-    load();
+    run();
+
     return () => {
       cancelled = true;
     };
-  }, [activeWindow, activePair]);
+  }, [activePair, windowKey]);
 
-  // If pairs arrive and current activePair is not present, fall back to first.
-  useEffect(() => {
-    if (!pairs.length) return;
-    if (pairs.some((p) => p.value === activePair)) return;
-    setActivePair(pairs[0].value);
-  }, [pairs, activePair]);
+  const pairs: PairOption[] = useMemo(() => {
+    if (resp?.pairs?.length) return resp.pairs;
+    // Safe fallback so the UI is not empty if the API doesn't include pairs.
+    return [
+      { value: "EURSSP", base: "SSP", quote: "EUR", label: "EUR/SSP" },
+      { value: "GBPSSP", base: "SSP", quote: "GBP", label: "GBP/SSP" },
+      { value: "KESSSP", base: "SSP", quote: "KES", label: "KES/SSP" },
+      { value: "USDSSP", base: "SSP", quote: "USD", label: "USD/SSP" },
+    ];
+  }, [resp]);
 
-  const activePairLabel = useMemo(() => {
-    const found = pairs.find((p) => p.value === activePair);
-    if (found) return found.label;
-    // best-effort label if not yet loaded
-    const clean = (activePair || "").replace(/[^A-Za-z]/g, "").toUpperCase();
-    const base = clean.slice(0, 3) || "SSP";
-    const quote = clean.slice(3, 6) || "USD";
-    return toPairLabel(base, quote);
-  }, [pairs, activePair]);
+  const pairLabel = useMemo(() => {
+    const match = pairs.find((p) => p.value === activePair);
+    return match?.label ?? resp?.label ?? "FX history";
+  }, [pairs, activePair, resp]);
 
-  const chartData = useMemo(() => {
-    if (!data || !data.history || data.history.length === 0) return null;
+  const history: HistoryPoint[] = useMemo(() => {
+    const raw = resp?.history ?? [];
+    // Ensure chronological order for the SVG path.
+    return [...raw].sort((a, b) => a.date.localeCompare(b.date));
+  }, [resp]);
 
-    const labels = data.history.map((p) => p.date);
-    const series = data.history.map((p) => p.mid);
+  const minDate = resp?.minDate ?? (history.length ? history[0].date : undefined);
+  const maxDate = resp?.maxDate ?? (history.length ? history[history.length - 1].date : undefined);
 
-    return {
-      labels,
-      datasets: [
-        {
-          label: `${activePairLabel} mid`,
-          data: series,
-          borderWidth: 1.6,
-          tension: 0.2,
-          pointRadius: 0,
-          borderColor: "rgba(255,255,255,0.85)",
-          backgroundColor: "rgba(255,255,255,0.04)",
-          fill: true,
-        },
-      ],
-    };
-  }, [data, activePairLabel]);
+  // --- SVG geometry (mirrors the simple chart component style) ---
+  const width = 1000;
+  const height = 260;
+  const padding = 24;
+  const topY = padding;
+  const bottomY = height - padding;
+  const leftX = padding;
+  const rightX = width - padding;
 
-  const chartOptions: ChartOptions<"line"> = useMemo(
-    () => ({
-      responsive: true,
-      maintainAspectRatio: false,
-      plugins: {
-        legend: { display: false },
-        tooltip: {
-          mode: "index",
-          intersect: false,
-          displayColors: false,
-          callbacks: {
-            title: (items) => (items?.length ? items[0].label || "" : ""),
-            label: (item) => {
-              const y = item.parsed?.y;
-              if (y == null) return "";
-              return `Mid: ${y.toLocaleString(undefined, {
-                maximumFractionDigits: 3,
-              })}`;
-            },
-          },
-        },
-        zoom: {
-          // Recommendation: wheel zoom + drag pan (best desktop UX)
-          zoom: {
-            wheel: { enabled: true },
-            pinch: { enabled: true },
-            mode: "x",
-          },
-          pan: {
-            enabled: true,
-            mode: "x",
-          },
-          limits: {
-            x: { min: "original", max: "original" },
-            y: { min: "original", max: "original" },
-          },
-        },
-      },
-      scales: {
-        x: {
-          grid: { color: "rgba(255,255,255,0.06)" },
-          ticks: { maxTicksLimit: 6, color: "rgba(255,255,255,0.6)" },
-        },
-        y: {
-          grid: { color: "rgba(255,255,255,0.06)" },
-          ticks: {
-            color: "rgba(255,255,255,0.6)",
-            callback: (value) =>
-              typeof value === "number"
-                ? value.toLocaleString(undefined, { maximumFractionDigits: 0 })
-                : value,
-          },
-        },
-      },
-      elements: { point: { hitRadius: 8 } },
-    }),
-    []
-  );
+  const values = useMemo(() => history.map((p) => p.mid).filter((n) => Number.isFinite(n)), [history]);
+  const minV = values.length ? Math.min(...values) : 0;
+  const maxV = values.length ? Math.max(...values) : 1;
+  const span = maxV - minV || 1;
 
-  const rangeText = safeDateRange(data?.minDate, data?.maxDate);
+  const svgPoints = useMemo(() => {
+    if (history.length === 0) return [] as Array<{ x: number; y: number }>;
+    return history.map((p, i) => {
+      const x = leftX + (history.length === 1 ? 0 : (i / (history.length - 1)) * (rightX - leftX));
+      const y = bottomY - ((p.mid - minV) / span) * (bottomY - topY);
+      return { x, y };
+    });
+  }, [history, leftX, rightX, bottomY, topY, minV, span]);
 
-  function handleResetZoom() {
-    const chart = chartRef.current;
-    if (chart && typeof chart.resetZoom === "function") {
-      chart.resetZoom();
-    }
-  }
+  const linePath = useMemo(() => buildPath(svgPoints), [svgPoints]);
+  const areaPath = useMemo(() => buildAreaPath(svgPoints, height, bottomY), [svgPoints, height, bottomY]);
+
+  const latest = history.length ? history[history.length - 1] : null;
 
   return (
-    <section className="flex flex-col gap-3 rounded-2xl border border-zinc-800 bg-black/40 px-5 pb-4 pt-4">
-      <div className="flex items-start justify-between gap-3">
-        <div className="min-w-0">
-          <h3 className="text-sm font-semibold tracking-wide text-zinc-200">
-            Engine history
-          </h3>
-          <p className="mt-1 text-xs text-zinc-500">
-            Select a pair and window. Zoom with mouse wheel; pan by dragging.
-          </p>
-          {rangeText ? (
-            <p className="mt-1 text-[11px] text-zinc-600">Range: {rangeText}</p>
-          ) : null}
+    <div className="rounded-2xl border border-white/10 bg-black/40 p-5 shadow-sm">
+      <div className="flex flex-col gap-3 md:flex-row md:items-start md:justify-between">
+        <div>
+          <div className="text-lg font-semibold">Engine history</div>
+          <div className="text-xs text-white/60">
+            {pairLabel} history{minDate && maxDate ? ` • Range: ${minDate} → ${maxDate}` : ""}
+          </div>
         </div>
 
-        <div className="flex flex-col items-end gap-2">
-          {/* Window selector */}
-          <div className="inline-flex items-center gap-1 rounded-full bg-zinc-900/70 p-1 text-[11px]">
-            {WINDOWS.map((w) => {
-              const isActive = activeWindow === w;
-              return (
-                <button
-                  key={w}
-                  type="button"
-                  onClick={() => setActiveWindow(w)}
-                  className={[
-                    "rounded-full px-3 py-1 transition",
-                    isActive
-                      ? "bg-emerald-500 text-black shadow-sm"
-                      : "text-zinc-400 hover:text-zinc-100",
-                  ].join(" ")}
-                >
-                  {formatWindowLabel(w)}
-                </button>
-              );
-            })}
+        <div className="flex flex-col items-start gap-3 md:items-end">
+          <div className="inline-flex rounded-full border border-zinc-800 bg-zinc-950 p-1">
+            {WINDOWS.map((k) => (
+              <button
+                key={k}
+                type="button"
+                onClick={() => setWindowKey(k)}
+                className={cn(
+                  "rounded-full px-3 py-1 text-xs transition",
+                  windowKey === k ? "bg-zinc-100 text-black" : "text-zinc-300 hover:text-white"
+                )}
+              >
+                {k}
+              </button>
+            ))}
           </div>
 
-          <button
-            type="button"
-            onClick={handleResetZoom}
-            className="rounded-full border border-zinc-700 bg-black px-3 py-1.5 text-[11px] text-zinc-100 hover:bg-zinc-900"
-          >
-            Reset zoom
-          </button>
-        </div>
-      </div>
-
-      {/* Pair selector */}
-      <div className="flex items-center justify-between gap-3">
-        <div className="flex min-w-0 items-center gap-2">
-          <span className="text-[11px] text-zinc-500">Pair</span>
-          <select
-            value={activePair}
-            onChange={(e) => setActivePair(e.target.value)}
-            className="max-w-[260px] truncate rounded-xl border border-zinc-800 bg-black px-3 py-2 text-xs text-zinc-100 focus:border-emerald-500 focus:outline-none"
-          >
-            {(pairs.length ? pairs : [{ base: "SSP", quote: "USD", label: "USD/SSP", value: "SSPUSD" }]).map(
-              (p) => (
+          <div className="flex items-center gap-2">
+            <div className="text-xs text-white/60">Pair</div>
+            <select
+              value={activePair}
+              onChange={(e) => setActivePair(e.target.value)}
+              className="rounded-full border border-white/10 bg-black px-3 py-2 text-xs text-white outline-none"
+            >
+              {pairs.map((p) => (
                 <option key={p.value} value={p.value}>
                   {p.label}
                 </option>
-              )
+              ))}
+            </select>
+          </div>
+        </div>
+      </div>
+
+      <div className="mt-4 rounded-2xl border border-white/10 bg-black/30 p-3">
+        {error ? (
+          <div className="rounded-xl border border-red-500/20 bg-red-500/10 p-3 text-sm text-red-200">
+            Failed to load history: {error}
+          </div>
+        ) : null}
+
+        <div className="relative">
+          <div className="flex items-center justify-between pb-2">
+            <div className="text-xs text-white/60">
+              {loading ? "Loading…" : latest ? `Latest: ${latest.date} • Mid: ${formatNumber(latest.mid)}` : "No data"}
+            </div>
+            <div className="text-xs text-white/50">Source: {resp?.source ?? "fx_daily_rates_default"}</div>
+          </div>
+
+          <div className="h-[260px] w-full overflow-hidden rounded-2xl border border-white/10 bg-black">
+            {history.length < 2 ? (
+              <div className="flex h-full items-center justify-center text-xs text-white/60">No history available.</div>
+            ) : (
+              <svg viewBox={`0 0 ${width} ${height}`} className="h-full w-full">
+                <defs>
+                  <linearGradient id="fxArea" x1="0" y1="0" x2="0" y2="1">
+                    <stop offset="0%" stopColor="white" stopOpacity="0.22" />
+                    <stop offset="90%" stopColor="white" stopOpacity="0" />
+                  </linearGradient>
+                </defs>
+
+                {/* subtle baseline */}
+                <line
+                  x1={leftX}
+                  y1={bottomY}
+                  x2={rightX}
+                  y2={bottomY}
+                  stroke="white"
+                  strokeOpacity={0.12}
+                  strokeWidth={2}
+                />
+
+                {/* area */}
+                <path d={areaPath} fill="url(#fxArea)" />
+
+                {/* line */}
+                <path
+                  d={linePath}
+                  fill="none"
+                  stroke="white"
+                  strokeWidth={2.5}
+                  strokeLinejoin="round"
+                  strokeLinecap="round"
+                />
+
+                {/* end-point dot */}
+                {svgPoints.length ? (
+                  <circle cx={svgPoints[svgPoints.length - 1].x} cy={svgPoints[svgPoints.length - 1].y} r={5} fill="white" />
+                ) : null}
+              </svg>
             )}
-          </select>
+          </div>
         </div>
 
-        {data?.source ? (
-          <span className="text-[11px] text-zinc-600">
-            Source: <span className="font-mono text-zinc-500">{data.source}</span>
-          </span>
-        ) : null}
+        <div className="mt-3 text-[11px] text-white/45">
+          Note: This view mirrors the simplified FX history chart (single series, line + light area fill). Window selection is calendar-based.
+        </div>
       </div>
-
-      <div className="mt-1 h-56 w-full overflow-hidden rounded-xl border border-zinc-800 bg-zinc-950/80 px-3 py-2">
-        {loading && (
-          <div className="flex h-full items-center justify-center text-xs text-zinc-500">
-            Loading {formatWindowLabel(activeWindow)}…
-          </div>
-        )}
-
-        {!loading && error && (
-          <div className="flex h-full items-center justify-center text-xs text-red-400">
-            {error}
-          </div>
-        )}
-
-        {!loading && !error && chartData && (
-          <Line ref={chartRef} data={chartData} options={chartOptions} />
-        )}
-
-        {!loading && !error && !chartData && (
-          <div className="flex h-full items-center justify-center text-xs text-zinc-500">
-            No data available for this pair/window.
-          </div>
-        )}
-      </div>
-
-      <p className="mt-1 text-[11px] leading-relaxed text-zinc-500">
-        Windows are calendar-based (e.g., 30d = latestDate minus 29 days). “All” returns
-        all rows available for the selected pair.
-      </p>
-    </section>
+    </div>
   );
 }
