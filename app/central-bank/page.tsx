@@ -439,17 +439,17 @@ export default function CentralBankDashboardPage() {
           ])
           .select(
             `
-          id,
-          as_of_date,
-          base_currency,
-          quote_currency,
-          rate_mid,
-          is_official,
-          is_manual_override,
-          notes,
-          created_email,
-          created_at
-        `
+            id,
+            as_of_date,
+            base_currency,
+            quote_currency,
+            rate_mid,
+            is_official,
+            is_manual_override,
+            notes,
+            created_email,
+            created_at
+          `
           )
           .single();
 
@@ -619,12 +619,10 @@ export default function CentralBankDashboardPage() {
             <p className="text-[0.65rem] uppercase tracking-[0.25em] text-zinc-500">
               EAMU FX · Central Bank Mode
             </p>
-            <h1 className="text-xl font-semibold tracking-tight">
-              A-Mode dashboard
-            </h1>
+            <h1 className="text-xl font-semibold tracking-tight">A-Mode dashboard</h1>
             <p className="text-xs text-zinc-400">
-              Internal view for managing fixings, overrides, exports, and
-              schedule. Not visible on the public interface.
+              Internal view for managing fixings, overrides, exports, and schedule. Not visible on
+              the public interface.
             </p>
           </div>
 
@@ -654,18 +652,434 @@ export default function CentralBankDashboardPage() {
         <div className="h-1 w-full rounded-full bg-gradient-to-r from-emerald-500 via-amber-400 to-red-500" />
 
         <section className="grid gap-6 lg:grid-cols-[minmax(0,1.5fr)_minmax(0,1.1fr)]">
+          {/* LEFT COLUMN */}
           <div className="space-y-6">
-            {/* Manual fixings & overrides card */}
-            {/* (unchanged from your file) */}
-            {/* ... keep your existing left column code exactly as-is ... */}
+            {/* Manual fixings & overrides */}
+            <div className="rounded-2xl border border-zinc-800 bg-zinc-950/80 p-4 space-y-4">
+              <div className="flex items-center justify-between gap-3">
+                <div>
+                  <p className="text-[0.65rem] uppercase tracking-[0.2em] text-zinc-500">
+                    Manual fixings &amp; overrides
+                  </p>
+                  <p className="text-sm text-zinc-400">
+                    View and manage rates that differ from the engine&apos;s computed fixing.
+                  </p>
+                </div>
+                <button
+                  type="button"
+                  onClick={startCreateNew}
+                  className="rounded-full bg-emerald-500 px-3 py-1.5 text-[0.75rem] font-medium text-black hover:bg-emerald-400"
+                >
+                  + Add manual fixing
+                </button>
+              </div>
+
+              {showForm && (
+                <form
+                  onSubmit={handleCreateOrUpdateManualFixing}
+                  className="rounded-xl border border-zinc-800 bg-black/70 p-3 space-y-3 text-xs"
+                >
+                  <div className="flex items-center justify-between">
+                    <p className="text-[0.7rem] text-zinc-400">
+                      {editingRowId ? "Edit existing manual fixing" : "Create a new manual fixing"}
+                    </p>
+                    {editingRowId && (
+                      <span className="rounded-full bg-zinc-800 px-2 py-0.5 text-[0.65rem] text-zinc-200">
+                        Editing
+                      </span>
+                    )}
+                  </div>
+
+                  <div className="grid gap-3 sm:grid-cols-2">
+                    <div className="space-y-1">
+                      <label className="text-[0.7rem] text-zinc-400">Fixing date</label>
+                      <input
+                        type="date"
+                        value={formDate}
+                        onChange={(e) => setFormDate(e.target.value)}
+                        className="w-full rounded-lg border border-zinc-800 bg-black px-2 py-1.5 text-xs text-zinc-100 focus:border-emerald-500 focus:outline-none focus:ring-1 focus:ring-emerald-500/60"
+                      />
+                    </div>
+
+                    <div className="space-y-1">
+                      <label className="text-[0.7rem] text-zinc-400">Base / quote</label>
+                      <div className="flex gap-2">
+                        <input
+                          type="text"
+                          value={formBase}
+                          onChange={(e) => setFormBase(e.target.value.toUpperCase())}
+                          className="w-1/2 rounded-lg border border-zinc-800 bg-black px-2 py-1.5 text-xs text-zinc-100 focus:border-emerald-500 focus:outline-none focus:ring-1 focus:ring-emerald-500/60"
+                        />
+                        <input
+                          type="text"
+                          value={formQuote}
+                          onChange={(e) => setFormQuote(e.target.value.toUpperCase())}
+                          className="w-1/2 rounded-lg border border-zinc-800 bg-black px-2 py-1.5 text-xs text-zinc-100 focus:border-emerald-500 focus:outline-none focus:ring-1 focus:ring-emerald-500/60"
+                        />
+                      </div>
+                    </div>
+                  </div>
+
+                  <div className="space-y-1">
+                    <label className="text-[0.7rem] text-zinc-400">Mid rate</label>
+                    <input
+                      type="text"
+                      value={formRate}
+                      onChange={(e) => setFormRate(e.target.value)}
+                      placeholder="e.g. 4550.644"
+                      className="w-full rounded-lg border border-zinc-800 bg-black px-2 py-1.5 text-xs text-zinc-100 focus:border-emerald-500 focus:outline-none focus:ring-1 focus:ring-emerald-500/60"
+                    />
+                  </div>
+
+                  <div className="flex flex-wrap items-center gap-4 text-[0.7rem]">
+                    <label className="inline-flex items-center gap-1 text-zinc-300">
+                      <input
+                        type="checkbox"
+                        checked={formOfficial}
+                        onChange={(e) => setFormOfficial(e.target.checked)}
+                        className="h-3 w-3 rounded border-zinc-700 bg-black"
+                      />
+                      Official fixing
+                    </label>
+
+                    <label className="inline-flex items-center gap-1 text-zinc-300">
+                      <input
+                        type="checkbox"
+                        checked={formOverride}
+                        onChange={(e) => setFormOverride(e.target.checked)}
+                        className="h-3 w-3 rounded border-zinc-700 bg-black"
+                      />
+                      Manual override
+                    </label>
+                  </div>
+
+                  <div className="space-y-1">
+                    <label className="text-[0.7rem] text-zinc-400">Notes (optional)</label>
+                    <textarea
+                      value={formNotes}
+                      onChange={(e) => setFormNotes(e.target.value)}
+                      rows={2}
+                      className="w-full rounded-lg border border-zinc-800 bg-black px-2 py-1.5 text-xs text-zinc-100 focus:border-emerald-500 focus:outline-none focus:ring-1 focus:ring-emerald-500/60"
+                      placeholder="Reason for override, board approval ref, etc."
+                    />
+                  </div>
+
+                  {formError && <p className="text-[0.7rem] text-red-400">{formError}</p>}
+
+                  <div className="flex items-center justify-between gap-3">
+                    <button
+                      type="button"
+                      onClick={() => {
+                        if (!savingForm) {
+                          setShowForm(false);
+                          setFormError(null);
+                          setEditingRowId(null);
+                          resetFormToDefaults();
+                        }
+                      }}
+                      className="text-[0.7rem] text-zinc-400 hover:text-zinc-100"
+                    >
+                      Cancel
+                    </button>
+
+                    <div className="flex items-center gap-2">
+                      {editingRowId && (
+                        <span className="text-[0.65rem] text-zinc-500">Editing existing row</span>
+                      )}
+                      <button
+                        type="submit"
+                        disabled={savingForm}
+                        className="rounded-full bg-emerald-500 px-3 py-1.5 text-[0.75rem] font-medium text-black hover:bg-emerald-400 disabled:cursor-not-allowed disabled:opacity-70"
+                      >
+                        {savingForm
+                          ? "Saving…"
+                          : editingRowId
+                          ? "Save changes"
+                          : "Save fixing"}
+                      </button>
+                    </div>
+                  </div>
+                </form>
+              )}
+
+              <div className="rounded-xl border border-zinc-900 bg-black/60 overflow-hidden text-xs">
+                <div className="grid grid-cols-[1.1fr_0.7fr_0.7fr_0.7fr_0.9fr_0.9fr] bg-zinc-950/90 text-[0.7rem] text-zinc-400">
+                  <div className="px-3 py-2">Date &amp; pair</div>
+                  <div className="px-3 py-2 text-right">Mid rate</div>
+                  <div className="px-3 py-2 text-right">Official</div>
+                  <div className="px-3 py-2 text-right">Override</div>
+                  <div className="px-3 py-2 text-right">Created by</div>
+                  <div className="px-3 py-2 text-right">Actions</div>
+                </div>
+
+                <div className="max-h-56 overflow-y-auto">
+                  {loadingOverrides ? (
+                    <div className="px-3 py-4 text-[0.75rem] text-zinc-500">
+                      Loading manual fixings…
+                    </div>
+                  ) : overridesError ? (
+                    <div className="px-3 py-4 text-[0.75rem] text-red-400">
+                      {overridesError}
+                    </div>
+                  ) : overrides.length === 0 ? (
+                    <div className="px-3 py-4 text-[0.75rem] text-zinc-500">
+                      No manual fixings yet. Use &quot;Add manual fixing&quot; to register one.
+                    </div>
+                  ) : (
+                    overrides.map((row) => (
+                      <div
+                        key={row.id}
+                        className="grid grid-cols-[1.1fr_0.7fr_0.7fr_0.7fr_0.9fr_0.9fr] border-t border-zinc-900/80 px-3 py-2"
+                      >
+                        <div>
+                          <p className="text-zinc-100">{row.as_of_date}</p>
+                          <p className="text-[0.7rem] text-zinc-500">
+                            {row.base_currency}/{row.quote_currency}
+                          </p>
+                        </div>
+
+                        <div className="text-right text-zinc-100">
+                          {row.rate_mid.toLocaleString("en-US", {
+                            maximumFractionDigits: 6,
+                          })}
+                        </div>
+
+                        <div className="text-right text-[0.7rem]">
+                          {row.is_official ? (
+                            <span className="rounded-full bg-emerald-500/10 px-2 py-0.5 text-emerald-400">
+                              Yes
+                            </span>
+                          ) : (
+                            <span className="text-zinc-600">No</span>
+                          )}
+                        </div>
+
+                        <div className="text-right text-[0.7rem]">
+                          {row.is_manual_override ? (
+                            <span className="rounded-full bg-amber-500/10 px-2 py-0.5 text-amber-400">
+                              Override
+                            </span>
+                          ) : (
+                            <span className="text-zinc-600">No</span>
+                          )}
+                        </div>
+
+                        <div className="text-right text-[0.7rem] text-zinc-500">
+                          {row.created_email ?? "—"}
+                        </div>
+
+                        <div className="flex items-center justify-end gap-2 text-[0.7rem]">
+                          <button
+                            type="button"
+                            onClick={() => startEditRow(row)}
+                            className="text-emerald-400 hover:text-emerald-300"
+                          >
+                            Edit
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => handleDeleteRow(row)}
+                            className="text-red-400 hover:text-red-300"
+                          >
+                            Delete
+                          </button>
+                        </div>
+                      </div>
+                    ))
+                  )}
+                </div>
+              </div>
+
+              <p className="text-[0.7rem] text-zinc-500">
+                Data in this table is stored in the Supabase{" "}
+                <code className="rounded bg-zinc-900 px-1 py-0.5">manual_fixings</code> table. Later
+                we can let the FX engine read from this table to override or annotate its own
+                computed fixings.
+              </p>
+            </div>
+
+            {/* Data export */}
+            <div className="rounded-2xl border border-zinc-800 bg-zinc-950/80 p-4 space-y-3">
+              <div className="flex items-center justify-between gap-3">
+                <div>
+                  <p className="text-[0.65rem] uppercase tracking-[0.2em] text-zinc-500">
+                    Data export
+                  </p>
+                  <p className="text-sm text-zinc-400">
+                    Export your manual fixings to CSV / Excel for reporting and backup.
+                  </p>
+                </div>
+              </div>
+
+              <div className="flex flex-wrap items-center gap-3 text-xs">
+                <button
+                  type="button"
+                  onClick={() => downloadManualFixingsCsv(overrides, "manual_fixings_overrides.csv")}
+                  className="rounded-xl border border-zinc-700 bg-black px-3 py-2 text-zinc-100 hover:bg-zinc-900"
+                >
+                  Export overrides (CSV)
+                </button>
+                <button
+                  type="button"
+                  onClick={() =>
+                    downloadManualFixingsCsv(overrides, "manual_fixings_overrides_excel.csv")
+                  }
+                  className="rounded-xl border border-zinc-700 bg-black px-3 py-2 text-zinc-100 hover:bg-zinc-900"
+                >
+                  Export overrides (Excel)
+                </button>
+              </div>
+
+              <p className="text-[0.7rem] text-zinc-500">
+                These exports currently include data from{" "}
+                <code className="rounded bg-zinc-900 px-1 py-0.5">manual_fixings</code> only. In a
+                later phase, we can also hook this panel into the main FX engine export endpoints for
+                full market history.
+              </p>
+            </div>
           </div>
 
+          {/* RIGHT COLUMN */}
           <div className="space-y-6">
             <EngineHistoryChartCard />
 
-            {/* Fixing schedule card */}
-            {/* (unchanged from your file) */}
-            {/* ... keep your existing fixing schedule code exactly as-is ... */}
+            <div className="rounded-2xl border border-zinc-800 bg-zinc-950/80 p-4 space-y-3">
+              <div className="flex items-center justify-between gap-3">
+                <div>
+                  <p className="text-[0.65rem] uppercase tracking-[0.2em] text-zinc-500">
+                    Fixing schedule
+                  </p>
+                  <p className="text-sm text-zinc-400">
+                    Keep track of upcoming fixing days and any special instructions.
+                  </p>
+                </div>
+
+                <button
+                  type="button"
+                  onClick={() => {
+                    setEditingSchedule((prev) => !prev);
+                    setScheduleError(null);
+                    if (schedule) {
+                      setScheduleDate(schedule.next_fixing_date);
+                      setScheduleWindow(schedule.window_label ?? "Normal fixing window");
+                      setScheduleNotes(schedule.notes ?? "");
+                    }
+                  }}
+                  className="rounded-full border border-zinc-700 bg-black px-3 py-1.5 text-[0.75rem] text-zinc-100 hover:bg-zinc-900"
+                >
+                  {editingSchedule ? "Close editor" : "Edit schedule"}
+                </button>
+              </div>
+
+              <div className="rounded-xl border border-zinc-900 bg-black/60 p-3 text-xs space-y-3">
+                {loadingSchedule ? (
+                  <p className="text-[0.75rem] text-zinc-500">Loading schedule…</p>
+                ) : scheduleError ? (
+                  <p className="text-[0.75rem] text-red-400">{scheduleError}</p>
+                ) : schedule ? (
+                  <>
+                    <div className="flex items-center justify-between">
+                      <span className="text-zinc-400">Next fixing date</span>
+                      <span className="rounded-full bg-emerald-500/10 px-2 py-0.5 text-[0.75rem] text-emerald-400">
+                        {schedule.window_label ?? "Normal fixing window"}
+                      </span>
+                    </div>
+
+                    <div className="grid grid-cols-2 gap-2 text-[0.8rem]">
+                      <div>
+                        <p className="text-zinc-500">Configured</p>
+                        <p className="text-zinc-100">
+                          {formatDateWithWeekday(schedule.next_fixing_date)}
+                        </p>
+                      </div>
+
+                      <div>
+                        <p className="text-zinc-500">Notes</p>
+                        <p className="text-zinc-100">{schedule.notes ?? "No special instructions."}</p>
+                      </div>
+                    </div>
+
+                    {schedule.created_email && (
+                      <p className="text-[0.7rem] text-zinc-500">
+                        Last updated by{" "}
+                        <span className="text-zinc-300">{schedule.created_email}</span>.
+                      </p>
+                    )}
+                  </>
+                ) : (
+                  <p className="text-[0.75rem] text-zinc-500">
+                    No schedule configured yet. Use &quot;Edit schedule&quot; to set the next fixing date.
+                  </p>
+                )}
+
+                {editingSchedule && (
+                  <form
+                    onSubmit={handleSaveSchedule}
+                    className="mt-2 space-y-2 border-t border-zinc-900 pt-3"
+                  >
+                    <div className="space-y-1">
+                      <label className="text-[0.7rem] text-zinc-400">Next fixing date</label>
+                      <input
+                        type="date"
+                        value={scheduleDate}
+                        onChange={(e) => setScheduleDate(e.target.value)}
+                        className="w-full rounded-lg border border-zinc-800 bg-black px-2 py-1.5 text-xs text-zinc-100 focus:border-emerald-500 focus:outline-none focus:ring-1 focus:ring-emerald-500/60"
+                      />
+                    </div>
+
+                    <div className="space-y-1">
+                      <label className="text-[0.7rem] text-zinc-400">Window label</label>
+                      <input
+                        type="text"
+                        value={scheduleWindow}
+                        onChange={(e) => setScheduleWindow(e.target.value)}
+                        placeholder="Normal fixing window"
+                        className="w-full rounded-lg border border-zinc-800 bg-black px-2 py-1.5 text-xs text-zinc-100 focus:border-emerald-500 focus:outline-none focus:ring-1 focus:ring-emerald-500/60"
+                      />
+                    </div>
+
+                    <div className="space-y-1">
+                      <label className="text-[0.7rem] text-zinc-400">Notes (optional)</label>
+                      <textarea
+                        value={scheduleNotes}
+                        onChange={(e) => setScheduleNotes(e.target.value)}
+                        rows={2}
+                        className="w-full rounded-lg border border-zinc-800 bg-black px-2 py-1.5 text-xs text-zinc-100 focus:border-emerald-500 focus:outline-none focus:ring-1 focus:ring-emerald-500/60"
+                        placeholder="e.g. Holiday adjustments, board instructions, etc."
+                      />
+                    </div>
+
+                    {scheduleError && <p className="text-[0.7rem] text-red-400">{scheduleError}</p>}
+
+                    <div className="flex items-center justify-end gap-2">
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setEditingSchedule(false);
+                          setScheduleError(null);
+                        }}
+                        className="text-[0.7rem] text-zinc-400 hover:text-zinc-100"
+                      >
+                        Cancel
+                      </button>
+                      <button
+                        type="submit"
+                        disabled={savingSchedule}
+                        className="rounded-full bg-emerald-500 px-3 py-1.5 text-[0.75rem] font-medium text-black hover:bg-emerald-400 disabled:cursor-not-allowed disabled:opacity-70"
+                      >
+                        {savingSchedule ? "Saving…" : "Save schedule"}
+                      </button>
+                    </div>
+                  </form>
+                )}
+              </div>
+
+              <p className="text-[0.7rem] text-zinc-500">
+                This card is backed by the{" "}
+                <code className="rounded bg-zinc-900 px-1 py-0.5">fixing_schedule</code> table in
+                Supabase. Use it to keep the official fixing calendar in sync with market communications.
+              </p>
+            </div>
           </div>
         </section>
       </div>
