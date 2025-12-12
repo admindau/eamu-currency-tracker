@@ -26,7 +26,8 @@ ChartJS.register(
   zoomPlugin
 );
 
-const WINDOWS = ["15d", "30d", "90d", "365d", "all"] as const;
+// ✅ Removed "all"
+const WINDOWS = ["15d", "30d", "90d", "365d"] as const;
 type WindowKey = (typeof WINDOWS)[number];
 
 type PairOption = {
@@ -49,7 +50,6 @@ type EngineHistoryResponse = {
 };
 
 function formatWindowLabel(key: WindowKey) {
-  if (key === "all") return "All";
   return key;
 }
 
@@ -283,19 +283,21 @@ export default function EngineHistoryChartCard() {
             onChange={(e) => setActivePair(e.target.value)}
             className="max-w-[260px] truncate rounded-xl border border-zinc-800 bg-black px-3 py-2 text-xs text-zinc-100 focus:border-emerald-500 focus:outline-none"
           >
-            {(pairs.length ? pairs : [{ base: "SSP", quote: "USD", label: "USD/SSP", value: "SSPUSD" }]).map(
-              (p) => (
-                <option key={p.value} value={p.value}>
-                  {p.label}
-                </option>
-              )
-            )}
+            {(pairs.length
+              ? pairs
+              : [{ base: "SSP", quote: "USD", label: "USD/SSP", value: "SSPUSD" }]
+            ).map((p) => (
+              <option key={p.value} value={p.value}>
+                {p.label}
+              </option>
+            ))}
           </select>
         </div>
 
         {data?.source ? (
           <span className="text-[11px] text-zinc-600">
-            Source: <span className="font-mono text-zinc-500">{data.source}</span>
+            Source:{" "}
+            <span className="font-mono text-zinc-500">{data.source}</span>
           </span>
         ) : null}
       </div>
@@ -325,8 +327,7 @@ export default function EngineHistoryChartCard() {
       </div>
 
       <p className="mt-1 text-[11px] leading-relaxed text-zinc-500">
-        Windows are calendar-based (e.g., 30d = latestDate minus 29 days). “All” returns
-        all rows available for the selected pair.
+        Windows are calendar-based (e.g., 30d = latestDate minus 29 days).
       </p>
     </section>
   );
