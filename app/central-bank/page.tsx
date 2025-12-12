@@ -5,26 +5,6 @@ import { useRouter } from "next/navigation";
 import Link from "next/link";
 import { getSupabaseBrowserClient } from "@/lib/supabase-browser";
 
-import {
-  Chart as ChartJS,
-  CategoryScale,
-  LinearScale,
-  PointElement,
-  LineElement,
-  Tooltip,
-  Legend,
-} from "chart.js";
-import { Line } from "react-chartjs-2";
-
-ChartJS.register(
-  CategoryScale,
-  LinearScale,
-  PointElement,
-  LineElement,
-  Tooltip,
-  Legend
-);
-
 type SupabaseUser = {
   id: string;
   email?: string;
@@ -51,15 +31,7 @@ type FixingScheduleRow = {
   created_email: string | null;
 };
 
-type AdminHistoryPoint = {
-  date: string;
-  mid: number;
-};
-
-function downloadManualFixingsCsv(
-  rows: ManualOverrideRow[],
-  filename: string
-) {
+function downloadManualFixingsCsv(rows: ManualOverrideRow[], filename: string) {
   if (!rows.length) {
     alert("No manual fixings available to export yet.");
     return;
@@ -127,290 +99,6 @@ function formatDateWithWeekday(dateStr: string): string {
   return `${dateStr} (${weekday})`;
 }
 
-function AdminAnalyticsPanel({ overrides }: { overrides: ManualOverrideRow[] }) {
-  const [range, setRange] = useState<"90d" | "365d" | "all">("365d");
-  const [history, setHistory] = useState<AdminHistoryPoint[]>([]);
-  const [loading, setLoading] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-
-  useEffect(() => {
-    let active = true;
-
-    async function load() {
-      setLoading(true);
-      setError(null);
-
-      try {
-        const days =
-          range === "90d" ? 90 : range === "365d" ? 365 : 3650;
-
-        const res = await fetch(
-          `/api/v1/rates/history?base=SSP&quote=USD&days=${days}`
-        );
-        if (!active) return;
-
-        if (!res.ok) throw new Error(`HTTP ${res.status}`);
-
-        const json: any = await res.json();
-
-        let rawCandidate: any = [];
-
-        if (Array.isArray(json)) {
-          rawCandidate = json;
-        } else if (json && typeof json === "object") {
-          const preferred =
-            json.data ??
-            json.history ??
-            json.results ??
-            json.points ??
-            json.items;
-
-          if (Array.isArray(preferred)) {
-            rawCandidate = preferred;
-          } else {
-            const firstArrayProp = Object.values(json).find((v) =>
-              Array.isArray(v)
-            );
-            rawCandidate = Array.isArray(firstArrayProp)
-              ? firstArrayProp
-              : [];
-          }
-        }
-
-        const raw: any[] = Array.isArray(rawCandidate) ? rawCandidate : [];
-
-        const mapped: AdminHistoryPoint[] = raw
-          .map((p) => {
-            const date =
-              p.as_of_date ??
-              p.date ??
-              p.as_of ??
-              p.fixing_date ??
-              p.fx_date ??
-              "";
-            const mid = Number(
-              p.rate_mid ?? p.mid ?? p.value ?? p.close ?? p.price ?? 0
-            );
-            if (!date || !Number.isFinite(mid)) return null;
-            return { date, mid };
-          })
-          .filter(Boolean) as AdminHistoryPoint[];
-
-        setHistory(mapped);
-      } catch (err: any) {
-        console.error("Failed to load admin history:", err);
-        setError(
-          err?.message ??
-            "Failed to load history from /api/v1/rates/history."
-        );
-        setHistory([]);
-      } finally {
-        if (active) setLoading(false);
-      }
-    }
-
-    load();
-    return () => {
-      active = false;
-    };
-  }, [range]);
-
-  const firstDate = history[0]?.date;
-  const lastDate = history[history.length - 1]?.date;
-
-  const overridesInRange = overrides.filter((o) => {
-    if (!firstDate || !lastDate) return false;
-    return (
-      o.base_currency === "SSP" &&
-      o.quote_currency === "USD" &&
-      o.as_of_date >= firstDate &&
-      o.as_of_date <= lastDate
-    );
-  });
-
-  const overrideLookup = new Map<string, ManualOverrideRow[]>();
-  for (const o of overridesInRange) {
-    const bucket = overrideLookup.get(o.as_of_date) ?? [];
-    bucket.push(o);
-    overrideLookup.set(o.as_of_date, bucket);
-  }
-
-  const labels = history.map((p) => p.date);
-
-  const engineSeries = {
-    label: "USD/SSP mid",
-    data: history.map((p) => p.mid),
-    borderColor: "rgba(244,244,245,0.9)",
-    backgroundColor: "rgba(24,24,27,0.8)",
-    borderWidth: 1.5,
-    pointRadius: 0,
-    tension: 0.15,
-  };
-
-  const overrideSeries = {
-    label: "Manual overrides",
-    data: history.map((p) => {
-      const rows = overrideLookup.get(p.date);
-      if (!rows || !rows.length) return null;
-      return rows[0].rate_mid;
-    }),
-    borderColor: "rgba(251,191,36,1)",
-    backgroundColor: "rgba(251,191,36,1)",
-    borderWidth: 0,
-    pointRadius: 4,
-    pointHoverRadius: 6,
-    showLine: false,
-  };
-
-  const chartData: any = {
-    labels,
-    datasets: [engineSeries, overrideSeries],
-  };
-
-  const chartOptions: any = {
-    responsive: true,
-    maintainAspectRatio: false,
-    plugins: {
-      legend: { display: false },
-      tooltip: {
-        intersect: false,
-        mode: "index",
-        callbacks: {
-          label: (ctx: any) => {
-            const v = ctx.parsed.y;
-            if (!Number.isFinite(v)) return "";
-
-            const datasetLabel = ctx.dataset.label as string;
-            const date = history[ctx.dataIndex]?.date;
-
-            if (datasetLabel === "Manual overrides") {
-              const rows = date ? overrideLookup.get(date) ?? [] : [];
-              const row = rows[0];
-              const engineMid = history[ctx.dataIndex]?.mid;
-              const delta =
-                Number.isFinite(engineMid) && Number.isFinite(row?.rate_mid)
-                  ? row.rate_mid - engineMid
-                  : undefined;
-
-              const base = `Manual override fixing: ${v.toLocaleString(
-                "en-US",
-                { maximumFractionDigits: 3 }
-              )}`;
-              if (delta === undefined) return base;
-              const sign = delta >= 0 ? "+" : "–";
-              const absDelta = Math.abs(delta);
-              return `${base} (${sign}${absDelta.toLocaleString("en-US", {
-                maximumFractionDigits: 3,
-              })} vs engine mid)`;
-            }
-
-            return `USD/SSP mid: ${v.toLocaleString("en-US", {
-              maximumFractionDigits: 3,
-            })}`;
-          },
-        },
-      },
-    },
-    scales: {
-      x: {
-        ticks: {
-          maxTicksLimit: 6,
-          color: "#71717a",
-          font: { size: 10 },
-        },
-        grid: { display: false },
-      },
-      y: {
-        ticks: {
-          color: "#71717a",
-          font: { size: 10 },
-        },
-        grid: { color: "rgba(39,39,42,0.6)" },
-      },
-    },
-  };
-
-  const rangeLabel =
-    range === "90d"
-      ? "last 90 days"
-      : range === "365d"
-      ? "last 365 days"
-      : "full available history";
-
-  return (
-    <div className="rounded-2xl border border-zinc-800 bg-zinc-950/80 p-4 space-y-3">
-      <div className="flex items-center justify-between gap-3">
-        <div>
-          <p className="text-[0.65rem] uppercase tracking-[0.2em] text-zinc-500">
-            Admin analytics
-          </p>
-          <p className="text-sm text-zinc-400">
-            Volatility and anchor-pair history for USD/SSP, using live engine
-            data.
-          </p>
-        </div>
-
-        <div className="flex flex-col items-end gap-2 text-[0.7rem]">
-          <div className="inline-flex rounded-full bg-zinc-900/70 p-1">
-            {(
-              [
-                ["90d", "90d"],
-                ["365d", "365d"],
-                ["All", "all"],
-              ] as const
-            ).map(([label, value]) => (
-              <button
-                key={value}
-                type="button"
-                onClick={() => setRange(value)}
-                className={`px-2.5 py-1 rounded-full ${
-                  range === value
-                    ? "bg-emerald-500 text-black"
-                    : "text-zinc-400 hover:text-zinc-100"
-                }`}
-              >
-                {label}
-              </button>
-            ))}
-          </div>
-          <p className="text-[0.65rem] text-zinc-500">
-            Viewing {rangeLabel}.
-          </p>
-        </div>
-      </div>
-
-      <div className="h-44 rounded-xl border border-zinc-900 bg-gradient-to-br from-zinc-950 via-zinc-950 to-zinc-900 px-2 py-2">
-        {loading ? (
-          <div className="flex h-full items-center justify-center text-[0.75rem] text-zinc-500">
-            Loading history…
-          </div>
-        ) : error ? (
-          <div className="flex h-full items-center justify-center text-[0.75rem] text-red-400">
-            {error}
-          </div>
-        ) : history.length === 0 ? (
-          <div className="flex h-full items-center justify-center text-[0.75rem] text-zinc-500">
-            No history data returned yet.
-          </div>
-        ) : (
-          <Line data={chartData} options={chartOptions} />
-        )}
-      </div>
-
-      <p className="text-[0.7rem] text-zinc-500">
-        In this window, the system has{" "}
-        <span className="text-zinc-200 font-medium">
-          {overridesInRange.length}
-        </span>{" "}
-        manual USD/SSP overrides captured in{" "}
-        <code className="rounded bg-zinc-900 px-1 py-0.5">manual_fixings</code>.
-        Days with overrides are highlighted as amber markers on the chart so you
-        can see where policy actions intersect with market moves.
-      </p>
-    </div>
-  );
-}
-
 export default function CentralBankDashboardPage() {
   const router = useRouter();
   const supabase = getSupabaseBrowserClient();
@@ -435,9 +123,7 @@ export default function CentralBankDashboardPage() {
 
   const today = new Date().toISOString().slice(0, 10);
   const [scheduleDate, setScheduleDate] = useState(today);
-  const [scheduleWindow, setScheduleWindow] = useState(
-    "Normal fixing window"
-  );
+  const [scheduleWindow, setScheduleWindow] = useState("Normal fixing window");
   const [scheduleNotes, setScheduleNotes] = useState("");
 
   const [formDate, setFormDate] = useState(today);
@@ -515,20 +201,18 @@ export default function CentralBankDashboardPage() {
               "Could not load manual fixings. Check that the table exists."
           );
         } else {
-          const normalised: ManualOverrideRow[] = (data ?? []).map(
-            (row) => ({
-              id: row.id,
-              as_of_date: row.as_of_date,
-              base_currency: row.base_currency,
-              quote_currency: row.quote_currency,
-              rate_mid: Number(row.rate_mid),
-              is_official: row.is_official,
-              is_manual_override: row.is_manual_override,
-              notes: row.notes ?? null,
-              created_email: row.created_email ?? null,
-              created_at: row.created_at,
-            })
-          );
+          const normalised: ManualOverrideRow[] = (data ?? []).map((row) => ({
+            id: row.id,
+            as_of_date: row.as_of_date,
+            base_currency: row.base_currency,
+            quote_currency: row.quote_currency,
+            rate_mid: Number(row.rate_mid),
+            is_official: row.is_official,
+            is_manual_override: row.is_manual_override,
+            notes: row.notes ?? null,
+            created_email: row.created_email ?? null,
+            created_at: row.created_at,
+          }));
           setOverrides(normalised);
         }
       } catch (err: any) {
@@ -593,9 +277,7 @@ export default function CentralBankDashboardPage() {
           };
           setSchedule(normalised);
           setScheduleDate(row.next_fixing_date);
-          setScheduleWindow(
-            row.window_label ?? "Normal fixing window"
-          );
+          setScheduleWindow(row.window_label ?? "Normal fixing window");
           setScheduleNotes(row.notes ?? "");
         } else {
           setSchedule(null);
@@ -669,7 +351,6 @@ export default function CentralBankDashboardPage() {
 
     try {
       if (editingRowId) {
-        // UPDATE
         const { data, error } = await supabase
           .from("manual_fixings")
           .update({
@@ -722,7 +403,6 @@ export default function CentralBankDashboardPage() {
           prev.map((row) => (row.id === updatedRow.id ? updatedRow : row))
         );
       } else {
-        // INSERT
         const { data, error } = await supabase
           .from("manual_fixings")
           .insert([
@@ -777,7 +457,6 @@ export default function CentralBankDashboardPage() {
         setOverrides((prev) => [newRow, ...prev]);
       }
 
-      // Reset and close form
       setShowForm(false);
       setEditingRowId(null);
       resetFormToDefaults();
@@ -906,9 +585,7 @@ export default function CentralBankDashboardPage() {
   if (loadingUser) {
     return (
       <main className="min-h-screen bg-black text-zinc-100 flex items-center justify-center">
-        <p className="text-xs text-zinc-500">
-          Checking Central Bank session…
-        </p>
+        <p className="text-xs text-zinc-500">Checking Central Bank session…</p>
       </main>
     );
   }
@@ -928,7 +605,7 @@ export default function CentralBankDashboardPage() {
             </h1>
             <p className="text-xs text-zinc-400">
               Internal view for managing fixings, overrides, exports, and
-              analytics. Not visible on the public interface.
+              schedule. Not visible on the public interface.
             </p>
           </div>
 
@@ -1269,10 +946,8 @@ export default function CentralBankDashboardPage() {
             </div>
           </div>
 
-          {/* Right column: analytics + fixing schedule */}
+          {/* Right column: fixing schedule only */}
           <div className="space-y-6">
-            <AdminAnalyticsPanel overrides={overrides} />
-
             <div className="rounded-2xl border border-zinc-800 bg-zinc-950/80 p-4 space-y-3">
               <div className="flex items-center justify-between gap-3">
                 <div>
