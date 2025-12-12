@@ -3,7 +3,7 @@ import { createClient } from "@supabase/supabase-js";
 
 /**
  * Engine history source (locked)
- * This view is treated as the canonical FX engine output.
+ * This view/table is treated as the canonical FX engine output.
  */
 const ENGINE_HISTORY_SOURCE = "fx_daily_rates_default";
 
@@ -27,16 +27,12 @@ const DEFAULT_PAIR = "SSPUSD";
  * Supabase admin client
  */
 function getSupabaseAdmin() {
-  const url =
-    process.env.NEXT_PUBLIC_SUPABASE_URL || process.env.SUPABASE_URL;
+  const url = process.env.NEXT_PUBLIC_SUPABASE_URL || process.env.SUPABASE_URL;
   const serviceKey =
-    process.env.SUPABASE_SERVICE_ROLE_KEY ||
-    process.env.SUPABASE_SERVICE_KEY;
+    process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.SUPABASE_SERVICE_KEY;
 
   if (!url || !serviceKey) {
-    throw new Error(
-      "Missing Supabase env vars (URL or SERVICE_ROLE_KEY)."
-    );
+    throw new Error("Missing Supabase env vars (URL or SERVICE_ROLE_KEY).");
   }
 
   return createClient(url, serviceKey, {
@@ -74,10 +70,9 @@ export async function GET(req: NextRequest) {
     const url = new URL(req.url);
 
     const rawWindow = (url.searchParams.get("window") ?? "90d").toLowerCase();
-    const window: WindowKey =
-      WINDOWS.includes(rawWindow as WindowKey)
-        ? (rawWindow as WindowKey)
-        : "90d";
+    const window: WindowKey = WINDOWS.includes(rawWindow as WindowKey)
+      ? (rawWindow as WindowKey)
+      : "90d";
 
     const rawPair = (url.searchParams.get("pair") ?? DEFAULT_PAIR).toUpperCase();
     const { base, quote, raw } = parsePair(rawPair);
@@ -93,10 +88,7 @@ export async function GET(req: NextRequest) {
       .limit(3000);
 
     if (pairsRes.error) {
-      return NextResponse.json(
-        { error: pairsRes.error.message },
-        { status: 500 }
-      );
+      return NextResponse.json({ error: pairsRes.error.message }, { status: 500 });
     }
 
     const pairMap = new Map<string, { base: string; quote: string }>();
@@ -119,7 +111,7 @@ export async function GET(req: NextRequest) {
       .sort((a, b) => a.label.localeCompare(b.label));
 
     /**
-     * Determine max date for this pair
+     * Determine RAW max date for this pair (diagnostic)
      */
     const latestRes = await supabase
       .from(ENGINE_HISTORY_SOURCE)
@@ -136,13 +128,13 @@ export async function GET(req: NextRequest) {
       );
     }
 
-    const maxDate = latestRes.data[0].as_of_date;
-    const maxTs = toUtcDateTs(maxDate);
+    const rawMaxDate: string = latestRes.data[0].as_of_date;
+    const rawMaxTs = toUtcDateTs(rawMaxDate);
 
     /**
-     * Determine min date based on window
+     * Determine RAW min date for this pair (diagnostic) OR window-min
      */
-    let minDate: string;
+    let windowMinDate: string;
 
     if (window === "all") {
       const earliestRes = await supabase
@@ -153,30 +145,32 @@ export async function GET(req: NextRequest) {
         .order("as_of_date", { ascending: true })
         .limit(1);
 
-      minDate = earliestRes.data?.[0]?.as_of_date ?? maxDate;
+      if (earliestRes.error || !earliestRes.data?.length) {
+        windowMinDate = rawMaxDate;
+      } else {
+        windowMinDate = earliestRes.data[0].as_of_date;
+      }
     } else {
       const days = WINDOW_TO_DAYS[window];
-      const minTs = maxTs - (days - 1) * DAY_MS;
-      minDate = tsToDate(minTs);
+      const minTs = rawMaxTs - (days - 1) * DAY_MS;
+      windowMinDate = tsToDate(minTs);
     }
 
     /**
-     * Fetch history
+     * Fetch history rows for the window.
+     * NOTE: We intentionally keep rate_mid in the select, then filter for numeric values.
      */
     const historyRes = await supabase
       .from(ENGINE_HISTORY_SOURCE)
       .select("as_of_date, rate_mid")
       .eq("base_currency", base)
       .eq("quote_currency", quote)
-      .gte("as_of_date", minDate)
-      .lte("as_of_date", maxDate)
+      .gte("as_of_date", windowMinDate)
+      .lte("as_of_date", rawMaxDate)
       .order("as_of_date", { ascending: true });
 
     if (historyRes.error) {
-      return NextResponse.json(
-        { error: historyRes.error.message },
-        { status: 500 }
-      );
+      return NextResponse.json({ error: historyRes.error.message }, { status: 500 });
     }
 
     const history = (historyRes.data ?? [])
@@ -184,26 +178,42 @@ export async function GET(req: NextRequest) {
         (r) =>
           r.as_of_date &&
           r.rate_mid !== null &&
+          r.rate_mid !== undefined &&
           Number.isFinite(Number(r.rate_mid))
       )
       .map((r) => ({
-        date: r.as_of_date,
+        date: r.as_of_date as string,
         mid: Number(r.rate_mid),
       }));
 
+    /**
+     * ✅ FIX A:
+     * Return minDate/maxDate based on the SAME FILTERED dataset used for plotting.
+     * This ensures the chart range label matches what the user actually sees.
+     */
+    const minDate = history.length ? history[0].date : windowMinDate;
+    const maxDate = history.length ? history[history.length - 1].date : rawMaxDate;
+
     return NextResponse.json({
       source: ENGINE_HISTORY_SOURCE,
-      pair: raw,
       window,
+      pair: raw,
+
+      // plotted range
       minDate,
       maxDate,
+
+      // diagnostics (helpful for confirming null gaps)
+      rawMinDate: windowMinDate,
+      rawMaxDate,
+
       pairs,
       history,
     });
   } catch (err: any) {
-    console.error("engine-history route error:", err);
+    console.error("engine-history route crashed:", err);
     return NextResponse.json(
-      { error: err?.message || "Server error" },
+      { error: err?.message || "Server crashed" },
       { status: 500 }
     );
   }
