@@ -15,36 +15,37 @@ const DEFAULT_PAIR = "SSPUSD";
 
 function parsePair(pair: string) {
   const clean = pair.replace(/[^A-Za-z]/g, "").toUpperCase();
-  if (clean.length < 6) {
-    return { base: "SSP", quote: "USD" };
-  }
-  return {
-    base: clean.slice(0, 3),
-    quote: clean.slice(3, 6),
-  };
+  if (clean.length < 6) return { base: "SSP", quote: "USD" };
+  return { base: clean.slice(0, 3), quote: clean.slice(3, 6) };
 }
 
 const DAY_MS = 24 * 60 * 60 * 1000;
-const toTs = (d: string) => new Date(`${d}T00:00:00Z`).getTime();
+
+// Safe “YYYY-MM-DD” → UTC timestamp
+function toUtcTs(d: string) {
+  return new Date(`${d}T00:00:00Z`).getTime();
+}
+
+// UTC timestamp → YYYY-MM-DD
+function tsToDate(ts: number) {
+  return new Date(ts).toISOString().slice(0, 10);
+}
 
 export async function GET(req: NextRequest) {
   try {
     const url = new URL(req.url);
 
     const rawWindow = (url.searchParams.get("window") ?? "365d").toLowerCase();
-    const windowParam: WindowKey = WINDOW_OPTIONS.includes(
-      rawWindow as WindowKey,
-    )
+    const windowParam: WindowKey = WINDOW_OPTIONS.includes(rawWindow as WindowKey)
       ? (rawWindow as WindowKey)
       : "365d";
 
     const pairParamRaw = (url.searchParams.get("pair") ?? DEFAULT_PAIR).toUpperCase();
     const { base, quote } = parsePair(pairParamRaw);
 
-    // In this project supabaseServer is already a client instance
     const supabase = supabaseServer;
 
-    // 1) Pull full history for this pair (no windowing yet)
+    // Pull full history for this pair (ascending)
     const { data: allRows, error: allErr } = await supabase
       .from("fx_daily_rates_default")
       .select("as_of_date, rate_mid")
@@ -54,54 +55,44 @@ export async function GET(req: NextRequest) {
 
     if (allErr) {
       console.error("Error fetching full anchor history:", allErr);
-      return NextResponse.json(
-        { error: "Failed to fetch anchor history" },
-        { status: 500 },
-      );
+      return NextResponse.json({ error: "Failed to fetch anchor history" }, { status: 500 });
     }
 
-    const rows =
-      (allRows as { as_of_date: string; rate_mid: number | null }[]) ?? [];
-
+    const rows = (allRows as { as_of_date: string; rate_mid: number | null }[]) ?? [];
     if (!rows.length) {
-      return NextResponse.json(
-        { error: "No anchor history available for this pair" },
-        { status: 404 },
-      );
+      // Keep behavior explicit; UI will show a clean error.
+      return NextResponse.json({ error: "No anchor history available for this pair" }, { status: 404 });
     }
 
     const earliestDate = rows[0].as_of_date;
     const latestDate = rows[rows.length - 1].as_of_date;
+    const latestTs = toUtcTs(latestDate);
 
-    const latestTs = toTs(latestDate);
-
-    // 2) Decide the effective min date based on the window
+    // Decide the effective min date (calendar window inclusive)
     let minTs: number;
     let minDateStr: string;
 
     if (windowParam === "all") {
-      // True ALL: from very first date in the table
-      minTs = toTs(earliestDate);
+      minTs = toUtcTs(earliestDate);
       minDateStr = earliestDate;
     } else {
       const days = WINDOW_TO_DAYS[windowParam];
-      // N calendar days inclusive → subtract (N - 1)
       minTs = latestTs - (days - 1) * DAY_MS;
-      const minDate = new Date(minTs);
-      minDateStr = minDate.toISOString().slice(0, 10);
+      minDateStr = tsToDate(minTs);
     }
 
     const maxDateStr = latestDate;
 
-    // 3) Apply windowing in memory
+    // Apply windowing in memory (stable and deterministic)
     const history = rows
-      .filter((row) => toTs(row.as_of_date) >= minTs)
+      .filter((row) => toUtcTs(row.as_of_date) >= minTs)
+      .filter((row) => row.rate_mid !== null && Number.isFinite(Number(row.rate_mid)))
       .map((row) => ({
         date: row.as_of_date,
-        mid: Number(row.rate_mid ?? 0),
+        mid: Number(row.rate_mid),
       }));
 
-    // 4) Fetch manual overrides within the same date range
+    // Manual overrides within the same date range
     const { data: overrideRows, error: overridesErr } = await supabase
       .from("manual_fixings")
       .select("as_of_date, rate_mid")
@@ -113,16 +104,15 @@ export async function GET(req: NextRequest) {
 
     if (overridesErr) {
       console.error("Error fetching manual overrides:", overridesErr);
-      return NextResponse.json(
-        { error: "Failed to fetch overrides" },
-        { status: 500 },
-      );
+      return NextResponse.json({ error: "Failed to fetch overrides" }, { status: 500 });
     }
 
-    const overrides = (overrideRows ?? []).map((row) => ({
-      date: row.as_of_date as string,
-      mid: Number(row.rate_mid ?? 0),
-    }));
+    const overrides = (overrideRows ?? [])
+      .filter((row: any) => row.rate_mid !== null && Number.isFinite(Number(row.rate_mid)))
+      .map((row: any) => ({
+        date: row.as_of_date as string,
+        mid: Number(row.rate_mid),
+      }));
 
     return NextResponse.json({
       pair: pairParamRaw,

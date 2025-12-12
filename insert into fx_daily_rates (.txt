@@ -8,8 +8,12 @@ insert into fx_daily_rates (
   is_manual_override
 )
 values
-  ('2025-12-10', 'SSP', 'UGX', 1.2890, 1, true, false),
-  ('2025-12-10', 'SSP', 'TZS', 1.8589, 1, true, false),
-  ('2025-12-10', 'SSP', 'RWF', 3.1281, 1, true, false),
-  ('2025-12-10', 'SSP', 'BIF', 1.5347, 1, true, false);
+  ('2025-12-12', 'SSP', 'USD', 4550.8557, 1, true, false),
+  ('2025-12-12', 'SSP', 'EUR', 5330.8792, 1, true, false),
+  ('2025-12-12', 'SSP', 'GBP', 6089.9551, 1, true, false),
+  ('2025-12-12', 'SSP', 'KES', 35.2784, 1, true, false),
+  ('2025-12-12', 'SSP', 'UGX', 1.2793, 1, true, false),
+  ('2025-12-12', 'SSP', 'TZS', 1.8542, 1, true, false),
+  ('2025-12-12', 'SSP', 'RWF', 3.1269, 1, true, false),
+  ('2025-12-12', 'SSP', 'BIF', 1.5339, 1, true, false);
   
