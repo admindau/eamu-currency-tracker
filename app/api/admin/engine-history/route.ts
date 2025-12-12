@@ -8,7 +8,7 @@ import { createClient } from "@supabase/supabase-js";
 const ENGINE_HISTORY_SOURCE = "fx_daily_rates_default";
 
 /**
- * Supported windows
+ * Supported windows (calendar days)
  */
 const WINDOWS = ["15d", "30d", "90d", "365d", "all"] as const;
 type WindowKey = (typeof WINDOWS)[number];
@@ -21,7 +21,12 @@ const WINDOW_TO_DAYS: Record<Exclude<WindowKey, "all">, number> = {
 };
 
 const DAY_MS = 24 * 60 * 60 * 1000;
-const DEFAULT_PAIR = "SSPUSD";
+
+/**
+ * Default display pair (UI)
+ * UI displays as QUOTE/BASE (e.g., USD/SSP).
+ */
+const DEFAULT_PAIR_DISPLAY = "USDSSP";
 
 /**
  * Supabase admin client
@@ -41,19 +46,8 @@ function getSupabaseAdmin() {
 }
 
 /**
- * Pair helpers
+ * Helpers
  */
-function parsePair(raw: string) {
-  const clean = raw.replace(/[^A-Za-z]/g, "").toUpperCase();
-  const base = clean.slice(0, 3) || "SSP";
-  const quote = clean.slice(3, 6) || "USD";
-  return { base, quote, raw: `${base}${quote}` };
-}
-
-function pairLabel(base: string, quote: string) {
-  return `${quote}/${base}`;
-}
-
 function toUtcDateTs(date: string) {
   return new Date(`${date}T00:00:00Z`).getTime();
 }
@@ -63,7 +57,51 @@ function tsToDate(ts: number) {
 }
 
 /**
+ * IMPORTANT: Pair semantics
+ *
+ * UI displays pair as QUOTE/BASE (e.g., USD/SSP).
+ * Storage is BASE/QUOTE (e.g., base_currency=SSP, quote_currency=USD).
+ *
+ * Therefore:
+ * - Display "USDSSP" must map to storage base="SSP", quote="USD".
+ * - In general, if SSP is present, SSP is the storage base (denominator).
+ */
+function normalizePairDisplay(raw: string) {
+  const clean = raw.replace(/[^A-Za-z]/g, "").toUpperCase();
+  const left = clean.slice(0, 3) || "USD"; // display quote
+  const right = clean.slice(3, 6) || "SSP"; // display base
+  return { left, right, displayValue: `${left}${right}` };
+}
+
+function mapDisplayPairToStorage(displayValue: string) {
+  const { left, right } = normalizePairDisplay(displayValue);
+
+  // If display is USD/SSP => left=USD, right=SSP => storage base=SSP, quote=USD
+  if (right === "SSP") {
+    return { base: "SSP", quote: left, displayValue: `${left}${right}` };
+  }
+
+  // If display is SSP/USD (rare in UI, but handle) => right=USD, left=SSP
+  // storage would still be base=SSP, quote=USD (consistent with model)
+  if (left === "SSP") {
+    return { base: "SSP", quote: right, displayValue: `${left}${right}` };
+  }
+
+  // Fallback for non-SSP pairs (future-proofing)
+  return { base: right, quote: left, displayValue: `${left}${right}` };
+}
+
+function pairLabelForDisplay(displayValue: string) {
+  const { left, right } = normalizePairDisplay(displayValue);
+  // Display label shown in UI: QUOTE/BASE
+  return `${left}/${right}`;
+}
+
+/**
  * GET /api/admin/engine-history
+ * Query params:
+ * - window: 15d | 30d | 90d | 365d | all
+ * - pair: display pair e.g. "USDSSP", "KESSSP"
  */
 export async function GET(req: NextRequest) {
   try {
@@ -74,44 +112,56 @@ export async function GET(req: NextRequest) {
       ? (rawWindow as WindowKey)
       : "90d";
 
-    const rawPair = (url.searchParams.get("pair") ?? DEFAULT_PAIR).toUpperCase();
-    const { base, quote, raw } = parsePair(rawPair);
+    const rawPair = (url.searchParams.get("pair") ?? DEFAULT_PAIR_DISPLAY).toUpperCase();
+    const { base, quote, displayValue } = mapDisplayPairToStorage(rawPair);
 
     const supabase = getSupabaseAdmin();
 
     /**
-     * Load available pairs for selector
+     * Build selector pairs list from engine source.
+     * We will emit *display pairs* (QUOTE/BASE), consistent with the UI.
+     *
+     * Storage rows: base_currency (BASE), quote_currency (QUOTE)
+     * Display: QUOTE/BASE
      */
     const pairsRes = await supabase
       .from(ENGINE_HISTORY_SOURCE)
       .select("base_currency, quote_currency")
-      .limit(3000);
+      .limit(5000);
 
     if (pairsRes.error) {
       return NextResponse.json({ error: pairsRes.error.message }, { status: 500 });
     }
 
-    const pairMap = new Map<string, { base: string; quote: string }>();
+    const pairSet = new Set<string>();
     for (const r of pairsRes.data ?? []) {
       const b = String(r.base_currency).toUpperCase();
       const q = String(r.quote_currency).toUpperCase();
-      pairMap.set(`${b}${q}`, { base: b, quote: q });
+      if (!b || !q) continue;
+
+      // display value is QUOTE+BASE (e.g., USDSSP)
+      const display = `${q}${b}`;
+      pairSet.add(display);
     }
 
     // Ensure requested pair always exists in selector
-    pairMap.set(raw, { base, quote });
+    pairSet.add(displayValue);
 
-    const pairs = Array.from(pairMap.entries())
-      .map(([value, p]) => ({
-        value,
-        base: p.base,
-        quote: p.quote,
-        label: pairLabel(p.base, p.quote),
-      }))
+    const pairs = Array.from(pairSet)
+      .map((val) => {
+        const { left, right } = normalizePairDisplay(val);
+        return {
+          value: val,
+          // keep these fields for UI convenience
+          base: right, // display base (denominator)
+          quote: left, // display quote (numerator)
+          label: `${left}/${right}`,
+        };
+      })
       .sort((a, b) => a.label.localeCompare(b.label));
 
     /**
-     * Determine RAW max date for this pair (diagnostic)
+     * Determine RAW max date for the *storage pair* (base/quote)
      */
     const latestRes = await supabase
       .from(ENGINE_HISTORY_SOURCE)
@@ -123,7 +173,12 @@ export async function GET(req: NextRequest) {
 
     if (latestRes.error || !latestRes.data?.length) {
       return NextResponse.json(
-        { error: "No engine history found for this pair." },
+        {
+          error: "No engine history found for this pair.",
+          pair: displayValue,
+          storagePair: { base, quote },
+          source: ENGINE_HISTORY_SOURCE,
+        },
         { status: 404 }
       );
     }
@@ -132,7 +187,7 @@ export async function GET(req: NextRequest) {
     const rawMaxTs = toUtcDateTs(rawMaxDate);
 
     /**
-     * Determine RAW min date for this pair (diagnostic) OR window-min
+     * Determine window minimum date (calendar-based)
      */
     let windowMinDate: string;
 
@@ -157,8 +212,7 @@ export async function GET(req: NextRequest) {
     }
 
     /**
-     * Fetch history rows for the window.
-     * NOTE: We intentionally keep rate_mid in the select, then filter for numeric values.
+     * Fetch history rows for the window, for the *storage pair*
      */
     const historyRes = await supabase
       .from(ENGINE_HISTORY_SOURCE)
@@ -187,9 +241,8 @@ export async function GET(req: NextRequest) {
       }));
 
     /**
-     * ✅ FIX A:
-     * Return minDate/maxDate based on the SAME FILTERED dataset used for plotting.
-     * This ensures the chart range label matches what the user actually sees.
+     * FIX A:
+     * Return minDate/maxDate based on the SAME FILTERED dataset used for plotting
      */
     const minDate = history.length ? history[0].date : windowMinDate;
     const maxDate = history.length ? history[history.length - 1].date : rawMaxDate;
@@ -197,13 +250,19 @@ export async function GET(req: NextRequest) {
     return NextResponse.json({
       source: ENGINE_HISTORY_SOURCE,
       window,
-      pair: raw,
 
-      // plotted range
+      // UI/display pair value (QUOTE+BASE), e.g. USDSSP
+      pair: displayValue,
+      label: pairLabelForDisplay(displayValue),
+
+      // storage mapping (BASE/QUOTE)
+      storagePair: { base, quote },
+
+      // plotted range (honest)
       minDate,
       maxDate,
 
-      // diagnostics (helpful for confirming null gaps)
+      // diagnostics
       rawMinDate: windowMinDate,
       rawMaxDate,
 
