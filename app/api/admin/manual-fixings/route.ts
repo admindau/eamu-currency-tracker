@@ -84,7 +84,7 @@ export async function POST(req: NextRequest) {
     );
   }
 
-  const insertPayload: any = {
+  const insertPayload = {
     as_of_date: body.as_of_date,
     base_currency: body.base_currency,
     quote_currency: body.quote_currency,
@@ -124,10 +124,25 @@ export async function PUT(req: NextRequest) {
   }
 
   if (!body.id) {
-    return NextResponse.json({ error: "Missing id for update." }, { status: 400 });
+    return NextResponse.json(
+      { error: "Missing id for update." },
+      { status: 400 },
+    );
   }
 
-  const updatePayload: any = {
+  if (
+    !body.as_of_date ||
+    !body.base_currency ||
+    !body.quote_currency ||
+    !Number.isFinite(body.rate_mid)
+  ) {
+    return NextResponse.json(
+      { error: "Missing or invalid required fields." },
+      { status: 400 },
+    );
+  }
+
+  const updatePayload = {
     as_of_date: body.as_of_date,
     base_currency: body.base_currency,
     quote_currency: body.quote_currency,
@@ -137,18 +152,31 @@ export async function PUT(req: NextRequest) {
     notes: body.notes ?? null,
   };
 
+  // Use maybeSingle() so we return a clean 404 when 0 rows are updated
+  // (common with RLS blocks or incorrect id), instead of the PostgREST
+  // "cannot coerce the result to a single JSON object" error.
   const { data, error } = await supabase
     .from("manual_fixings")
     .update(updatePayload)
     .eq("id", body.id)
     .select(SELECT_COLUMNS)
-    .single();
+    .maybeSingle();
 
   if (error) {
     console.error("PUT manual_fixings error:", error);
     return NextResponse.json(
       { error: "Failed to update manual fixing." },
       { status: 500 },
+    );
+  }
+
+  if (!data) {
+    return NextResponse.json(
+      {
+        error:
+          "No manual fixing updated. (Either the id does not exist, or your RLS policies prevent updating this row.)",
+      },
+      { status: 404 },
     );
   }
 
@@ -174,12 +202,17 @@ export async function DELETE(req: NextRequest) {
   }
 
   if (!id) {
-    return NextResponse.json({ error: "Missing id for delete." }, { status: 400 });
+    return NextResponse.json(
+      { error: "Missing id for delete." },
+      { status: 400 },
+    );
   }
 
-  const { data, error } = await supabase
+  // IMPORTANT: your typings don't support select(columns, { count }),
+  // so we request count via delete({ count }) and keep select() 1-arg.
+  const { data, error, count } = await supabase
     .from("manual_fixings")
-    .delete()
+    .delete({ count: "exact" })
     .eq("id", id)
     .select("id")
     .maybeSingle();
@@ -192,10 +225,12 @@ export async function DELETE(req: NextRequest) {
     );
   }
 
-  if (!data) {
-    // No row matched that id – useful signal for us
+  if (!count || count < 1 || !data) {
     return NextResponse.json(
-      { error: "No manual fixing found for that id." },
+      {
+        error:
+          "No manual fixing deleted. (Either the id does not exist, or your RLS policies prevent deleting this row.)",
+      },
       { status: 404 },
     );
   }
