@@ -31,6 +31,19 @@ function tsToDate(ts: number) {
   return new Date(ts).toISOString().slice(0, 10);
 }
 
+type HistoryPoint = { date: string; mid: number };
+
+type ManualFixingPoint = {
+  id: string;
+  date: string;
+  mid: number;
+  isOfficial: boolean;
+  isManualOverride: boolean;
+  notes: string | null;
+  createdAt: string;
+  createdEmail: string | null;
+};
+
 export async function GET(req: NextRequest) {
   try {
     const url = new URL(req.url);
@@ -60,7 +73,6 @@ export async function GET(req: NextRequest) {
 
     const rows = (allRows as { as_of_date: string; rate_mid: number | null }[]) ?? [];
     if (!rows.length) {
-      // Keep behavior explicit; UI will show a clean error.
       return NextResponse.json({ error: "No anchor history available for this pair" }, { status: 404 });
     }
 
@@ -84,7 +96,7 @@ export async function GET(req: NextRequest) {
     const maxDateStr = latestDate;
 
     // Apply windowing in memory (stable and deterministic)
-    const history = rows
+    const history: HistoryPoint[] = rows
       .filter((row) => toUtcTs(row.as_of_date) >= minTs)
       .filter((row) => row.rate_mid !== null && Number.isFinite(Number(row.rate_mid)))
       .map((row) => ({
@@ -92,26 +104,32 @@ export async function GET(req: NextRequest) {
         mid: Number(row.rate_mid),
       }));
 
-    // Manual overrides within the same date range
-    const { data: overrideRows, error: overridesErr } = await supabase
+    // Manual fixings (includes manual overrides) within the same date range
+    const { data: manualRows, error: manualErr } = await supabase
       .from("manual_fixings")
-      .select("as_of_date, rate_mid")
+      .select("id, as_of_date, rate_mid, is_official, is_manual_override, notes, created_at, created_email")
       .eq("base_currency", base)
       .eq("quote_currency", quote)
       .gte("as_of_date", minDateStr)
       .lte("as_of_date", maxDateStr)
       .order("as_of_date", { ascending: true });
 
-    if (overridesErr) {
-      console.error("Error fetching manual overrides:", overridesErr);
-      return NextResponse.json({ error: "Failed to fetch overrides" }, { status: 500 });
+    if (manualErr) {
+      console.error("Error fetching manual fixings:", manualErr);
+      return NextResponse.json({ error: "Failed to fetch manual fixings" }, { status: 500 });
     }
 
-    const overrides = (overrideRows ?? [])
+    const manualFixings: ManualFixingPoint[] = (manualRows ?? [])
       .filter((row: any) => row.rate_mid !== null && Number.isFinite(Number(row.rate_mid)))
       .map((row: any) => ({
-        date: row.as_of_date as string,
+        id: String(row.id),
+        date: String(row.as_of_date),
         mid: Number(row.rate_mid),
+        isOfficial: Boolean(row.is_official),
+        isManualOverride: Boolean(row.is_manual_override),
+        notes: (row.notes ?? null) as string | null,
+        createdAt: String(row.created_at),
+        createdEmail: (row.created_email ?? null) as string | null,
       }));
 
     return NextResponse.json({
@@ -120,7 +138,7 @@ export async function GET(req: NextRequest) {
       minDate: minDateStr,
       maxDate: maxDateStr,
       history,
-      overrides,
+      manualFixings,
     });
   } catch (err) {
     console.error("Anchor history route crashed:", err);
