@@ -21,7 +21,7 @@ type ManualFixing = {
 type ApiResponse = {
   source: string;
   window: WindowKey;
-  pair: string; // base+quote, e.g. SSPUSD
+  pair: string; // base+quote e.g. SSPUSD
   displayPair: string; // e.g. USD/SSP
   minDate: string;
   maxDate: string;
@@ -52,7 +52,7 @@ function formatMode(m: Mode) {
 export default function EngineHistoryChartV2() {
   const wrapperRef = useRef<HTMLDivElement | null>(null);
 
-  // Keep value style consistent with baseline chart: base+quote (SSPUSD)
+  // Keep value convention consistent with baseline chart: base+quote (SSPUSD)
   const [pair, setPair] = useState<string>("SSPUSD");
   const [windowKey, setWindowKey] = useState<WindowKey>("365d");
   const [mode, setMode] = useState<Mode>("both");
@@ -63,7 +63,9 @@ export default function EngineHistoryChartV2() {
 
   const [hoverIdx, setHoverIdx] = useState<number | null>(null);
   const [lockedIdx, setLockedIdx] = useState<number | null>(null);
-  const [selectedManual, setSelectedManual] = useState<ManualFixing | null>(null);
+  const [selectedManual, setSelectedManual] = useState<ManualFixing | null>(
+    null
+  );
 
   useEffect(() => {
     let cancelled = false;
@@ -77,14 +79,14 @@ export default function EngineHistoryChartV2() {
 
       try {
         const res = await fetch(
-          `/api/admin/engine-history-v2?window=${encodeURIComponent(windowKey)}&pair=${encodeURIComponent(pair)}`,
+          `/api/admin/engine-history-v2?window=${encodeURIComponent(
+            windowKey
+          )}&pair=${encodeURIComponent(pair)}`,
           { method: "GET", cache: "no-store" }
         );
 
         const body = await res.json().catch(() => ({}));
-        if (!res.ok) {
-          throw new Error(body?.error || `Request failed (${res.status})`);
-        }
+        if (!res.ok) throw new Error(body?.error || `Request failed (${res.status})`);
 
         if (!cancelled) setData(body as ApiResponse);
       } catch (e: any) {
@@ -118,13 +120,13 @@ export default function EngineHistoryChartV2() {
     return official;
   }, [mode, official, effective]);
 
-  // For snapping (hover/click), prefer effective if we are showing both
+  // For snapping/inspection: prefer effective when showing both
   const snapSeries = useMemo(() => {
     if (mode === "both") return effective.length ? effective : official;
     return primarySeries;
   }, [mode, primarySeries, official, effective]);
 
-  const activeIdx = lockedIdx ?? hoverIdx;
+  const hasSeries = snapSeries.length >= 2;
 
   // SVG layout
   const width = 920;
@@ -134,12 +136,12 @@ export default function EngineHistoryChartV2() {
   const innerW = width - paddingX * 2;
   const innerH = height - paddingY * 2;
 
-  const mids = snapSeries.map((p) => p.mid);
+  const mids = hasSeries ? snapSeries.map((p) => p.mid) : [];
   const min = mids.length ? Math.min(...mids) : 0;
   const max = mids.length ? Math.max(...mids) : 1;
   const range = max - min || 1;
 
-  const stepX = snapSeries.length > 1 ? innerW / (snapSeries.length - 1) : innerW;
+  const stepX = hasSeries ? innerW / (snapSeries.length - 1) : innerW;
 
   const toXY = (p: Point, idx: number) => {
     const x = paddingX + idx * stepX;
@@ -158,12 +160,12 @@ export default function EngineHistoryChartV2() {
       .join(" ");
   };
 
-  const pathOfficial = pathFor(official);
-  const pathEffective = pathFor(effective);
+  const pathOfficial = hasSeries ? pathFor(official) : "";
+  const pathEffective = hasSeries ? pathFor(effective) : "";
 
   function clientXToIndex(clientX: number) {
     const el = wrapperRef.current;
-    if (!el) return 0;
+    if (!el || !hasSeries) return 0;
     const rect = el.getBoundingClientRect();
     const px = clientX - rect.left;
     const x = (px / rect.width) * width;
@@ -172,28 +174,34 @@ export default function EngineHistoryChartV2() {
   }
 
   function onMove(clientX: number) {
-    if (snapSeries.length < 2) return;
+    if (!hasSeries) return;
     setHoverIdx(clientXToIndex(clientX));
   }
 
   function onSelect(idx: number) {
-    setLockedIdx(idx);
-    const p = snapSeries[idx];
+    if (!hasSeries) return;
+    const safeIdx = clamp(idx, 0, snapSeries.length - 1);
+    setLockedIdx(safeIdx);
+
+    const p = snapSeries[safeIdx];
     const m = p ? manualByDate.get(p.date) ?? null : null;
     setSelectedManual(m);
   }
 
   const rangeText = safeRangeText(data?.minDate, data?.maxDate);
 
-  const markerIdxs = snapSeries
-    .map((pt, i) => ({ pt, i }))
-    .filter(({ pt }) => manualByDate.has(pt.date))
-    .map(({ i }) => i);
+  const markerIdxs = hasSeries
+    ? snapSeries
+        .map((pt, i) => ({ pt, i }))
+        .filter(({ pt }) => manualByDate.has(pt.date))
+        .map(({ i }) => i)
+    : [];
 
-  const idx = activeIdx ?? (snapSeries.length - 1);
-  const p = snapSeries[idx];
-  const xy = toXY(p, idx);
-  const m = manualByDate.get(p.date) ?? null;
+  // ✅ Critical guard: only compute these when we have data
+  const activeIdx = hasSeries ? (lockedIdx ?? hoverIdx ?? (snapSeries.length - 1)) : null;
+  const activePoint = activeIdx !== null ? snapSeries[activeIdx] : null;
+  const activeXY = activePoint && activeIdx !== null ? toXY(activePoint, activeIdx) : null;
+  const activeManual = activePoint ? manualByDate.get(activePoint.date) ?? null : null;
 
   return (
     <section className="flex flex-col gap-3 rounded-2xl border border-zinc-800 bg-black/40 px-5 pb-4 pt-4">
@@ -255,7 +263,7 @@ export default function EngineHistoryChartV2() {
         </div>
       </div>
 
-      {/* Pair selector mirrors baseline value convention */}
+      {/* Pair selector */}
       <div className="flex items-center justify-between gap-3">
         <div className="flex min-w-0 items-center gap-2">
           <span className="text-[11px] text-zinc-500">Pair</span>
@@ -306,10 +314,10 @@ export default function EngineHistoryChartV2() {
           </div>
         )}
 
-        {!loading && !err && snapSeries.length >= 2 && (
+        {!loading && !err && hasSeries && (
           <div className="relative">
             <svg
-              viewBox={`0 0 ${width} ${height}`}
+              viewBox={`0 0 ${width} 0`.replace("0", String(height))}
               className="h-56 w-full"
               onMouseMove={(e) => onMove(e.clientX)}
               onMouseLeave={() => setHoverIdx(null)}
@@ -346,44 +354,52 @@ export default function EngineHistoryChartV2() {
                 />
               )}
 
-              {/* Manual markers */}
               {markerIdxs.map((i) => {
                 const pt = snapSeries[i];
                 const { x, y } = toXY(pt, i);
                 const mm = manualByDate.get(pt.date)!;
                 const r = mm.isManualOverride ? 4 : 3;
-                return <circle key={pt.date} cx={x} cy={y} r={r} fill="#fafafa" opacity={0.95} />;
+                return (
+                  <circle
+                    key={pt.date}
+                    cx={x}
+                    cy={y}
+                    r={r}
+                    fill="#fafafa"
+                    opacity={0.95}
+                  />
+                );
               })}
 
-              {/* Crosshair */}
-              {(hoverIdx !== null || lockedIdx !== null) && (
+              {activeXY && (
                 <>
                   <line
-                    x1={xy.x}
+                    x1={activeXY.x}
                     y1={paddingY}
-                    x2={xy.x}
+                    x2={activeXY.x}
                     y2={height - paddingY}
                     stroke="#3f3f46"
                     strokeWidth={1}
                   />
-                  <circle cx={xy.x} cy={xy.y} r={4} fill="#fafafa" />
+                  <circle cx={activeXY.x} cy={activeXY.y} r={4} fill="#fafafa" />
                 </>
               )}
 
               <rect x={0} y={0} width={width} height={height} fill="transparent" />
             </svg>
 
-            {/* Tooltip */}
-            {(hoverIdx !== null || lockedIdx !== null) && (
+            {activeXY && activePoint && (
               <div
                 className="pointer-events-none absolute -translate-x-1/2 rounded-xl border border-zinc-800 bg-black/90 px-3 py-2 text-[11px] text-zinc-100 shadow-lg"
-                style={{ left: `${(xy.x / width) * 100}%`, top: 10 }}
+                style={{ left: `${(activeXY.x / width) * 100}%`, top: 10 }}
               >
-                <div className="text-zinc-300">{p.date}</div>
-                <div className="tabular-nums">{p.mid.toLocaleString()}</div>
-                {m ? (
+                <div className="text-zinc-300">{activePoint.date}</div>
+                <div className="tabular-nums">
+                  {activePoint.mid.toLocaleString()}
+                </div>
+                {activeManual ? (
                   <div className="text-zinc-400">
-                    {m.isManualOverride ? "Manual override" : "Manual fixing"}
+                    {activeManual.isManualOverride ? "Manual override" : "Manual fixing"}
                   </div>
                 ) : (
                   <div className="text-zinc-500">Official</div>
@@ -393,7 +409,7 @@ export default function EngineHistoryChartV2() {
           </div>
         )}
 
-        {!loading && !err && snapSeries.length < 2 && (
+        {!loading && !err && !hasSeries && (
           <div className="flex h-56 items-center justify-center text-xs text-zinc-500">
             Not enough data to render.
           </div>
@@ -401,13 +417,17 @@ export default function EngineHistoryChartV2() {
       </div>
 
       {/* Inspector */}
-      {!loading && !err && snapSeries.length >= 2 && (
-        <div className="rounded-2xl border border-zinc-900 bg-black/40 p-4 mystery">
+      {!loading && !err && hasSeries && activePoint ? (
+        <div className="rounded-2xl border border-zinc-900 bg-black/40 p-4">
           <div className="text-[10px] uppercase tracking-[0.18em] text-zinc-500">
             Inspector
           </div>
+
           <div className="mt-1 text-sm text-zinc-100">
-            {p.date} • <span className="tabular-nums">{p.mid.toLocaleString()}</span>
+            {activePoint.date} •{" "}
+            <span className="tabular-nums">
+              {activePoint.mid.toLocaleString()}
+            </span>
           </div>
 
           {selectedManual ? (
@@ -418,7 +438,9 @@ export default function EngineHistoryChartV2() {
               </div>
               <div>
                 <span className="text-zinc-500">Created:</span>{" "}
-                <span className="tabular-nums">{new Date(selectedManual.createdAt).toLocaleString()}</span>
+                <span className="tabular-nums">
+                  {new Date(selectedManual.createdAt).toLocaleString()}
+                </span>
               </div>
               {selectedManual.createdEmail && (
                 <div>
@@ -426,7 +448,8 @@ export default function EngineHistoryChartV2() {
                 </div>
               )}
               <div>
-                <span className="text-zinc-500">Notes:</span> {selectedManual.notes ?? "—"}
+                <span className="text-zinc-500">Notes:</span>{" "}
+                {selectedManual.notes ?? "—"}
               </div>
             </div>
           ) : (
@@ -435,10 +458,11 @@ export default function EngineHistoryChartV2() {
             </div>
           )}
         </div>
-      )}
+      ) : null}
 
       <p className="mt-1 text-[11px] leading-relaxed text-zinc-500">
-        v2 adds an “All” window and overlays from <span className="font-mono">manual_fixings</span>. Use “Effective” to see applied overrides.
+        v2 adds an “All” window and overlays from{" "}
+        <span className="font-mono">manual_fixings</span>. Use “Effective” to see applied overrides.
       </p>
     </section>
   );
