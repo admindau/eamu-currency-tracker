@@ -44,6 +44,69 @@ type ManualFixingPoint = {
   createdEmail: string | null;
 };
 
+async function getPairMinMax(params: { base: string; quote: string }) {
+  const supabase = supabaseServer;
+
+  const { data: maxRows, error: maxErr } = await supabase
+    .from("fx_daily_rates_default")
+    .select("as_of_date")
+    .eq("base_currency", params.base)
+    .eq("quote_currency", params.quote)
+    .order("as_of_date", { ascending: false })
+    .limit(1);
+
+  if (maxErr) throw maxErr;
+  if (!maxRows || maxRows.length === 0) return null;
+
+  const { data: minRows, error: minErr } = await supabase
+    .from("fx_daily_rates_default")
+    .select("as_of_date")
+    .eq("base_currency", params.base)
+    .eq("quote_currency", params.quote)
+    .order("as_of_date", { ascending: true })
+    .limit(1);
+
+  if (minErr) throw minErr;
+  if (!minRows || minRows.length === 0) return null;
+
+  return {
+    minDate: String(minRows[0].as_of_date),
+    maxDate: String(maxRows[0].as_of_date),
+  };
+}
+
+/**
+ * PostgREST default page size behavior is a common source of truncation.
+ * We paginate explicitly with range() for "all" windows.
+ */
+async function fetchHistoryAll(params: { base: string; quote: string }) {
+  const supabase = supabaseServer;
+  const pageSize = 1000;
+
+  const out: { as_of_date: string; rate_mid: number | null }[] = [];
+  let offset = 0;
+
+  while (true) {
+    const { data, error } = await supabase
+      .from("fx_daily_rates_default")
+      .select("as_of_date, rate_mid")
+      .eq("base_currency", params.base)
+      .eq("quote_currency", params.quote)
+      .order("as_of_date", { ascending: true })
+      .range(offset, offset + pageSize - 1);
+
+    if (error) throw error;
+
+    const batch = (data ?? []) as { as_of_date: string; rate_mid: number | null }[];
+    out.push(...batch);
+
+    if (batch.length < pageSize) break;
+    offset += pageSize;
+  }
+
+  return out;
+}
+
 export async function GET(req: NextRequest) {
   try {
     const url = new URL(req.url);
@@ -56,28 +119,13 @@ export async function GET(req: NextRequest) {
     const pairParamRaw = (url.searchParams.get("pair") ?? DEFAULT_PAIR).toUpperCase();
     const { base, quote } = parsePair(pairParamRaw);
 
-    const supabase = supabaseServer;
-
-    // Pull full history for this pair (ascending)
-    const { data: allRows, error: allErr } = await supabase
-      .from("fx_daily_rates_default")
-      .select("as_of_date, rate_mid")
-      .eq("base_currency", base)
-      .eq("quote_currency", quote)
-      .order("as_of_date", { ascending: true });
-
-    if (allErr) {
-      console.error("Error fetching full anchor history:", allErr);
-      return NextResponse.json({ error: "Failed to fetch anchor history" }, { status: 500 });
-    }
-
-    const rows = (allRows as { as_of_date: string; rate_mid: number | null }[]) ?? [];
-    if (!rows.length) {
+    const bounds = await getPairMinMax({ base, quote });
+    if (!bounds) {
       return NextResponse.json({ error: "No anchor history available for this pair" }, { status: 404 });
     }
 
-    const earliestDate = rows[0].as_of_date;
-    const latestDate = rows[rows.length - 1].as_of_date;
+    const earliestDate = bounds.minDate;
+    const latestDate = bounds.maxDate;
     const latestTs = toUtcTs(latestDate);
 
     // Decide the effective min date (calendar window inclusive)
@@ -95,7 +143,31 @@ export async function GET(req: NextRequest) {
 
     const maxDateStr = latestDate;
 
-    // Apply windowing in memory (stable and deterministic)
+    const supabase = supabaseServer;
+
+    // Fetch history for the requested window
+    let rows: { as_of_date: string; rate_mid: number | null }[] = [];
+
+    if (windowParam === "all") {
+      // MUST paginate or it will truncate around 1000 rows (~May 2025 from Aug 2022)
+      rows = await fetchHistoryAll({ base, quote });
+    } else {
+      const { data, error } = await supabase
+        .from("fx_daily_rates_default")
+        .select("as_of_date, rate_mid")
+        .eq("base_currency", base)
+        .eq("quote_currency", quote)
+        .gte("as_of_date", minDateStr)
+        .lte("as_of_date", maxDateStr)
+        .order("as_of_date", { ascending: true });
+
+      if (error) {
+        console.error("Error fetching anchor history window:", error);
+        return NextResponse.json({ error: "Failed to fetch anchor history" }, { status: 500 });
+      }
+      rows = (data ?? []) as { as_of_date: string; rate_mid: number | null }[];
+    }
+
     const history: HistoryPoint[] = rows
       .filter((row) => toUtcTs(row.as_of_date) >= minTs)
       .filter((row) => row.rate_mid !== null && Number.isFinite(Number(row.rate_mid)))
@@ -105,6 +177,7 @@ export async function GET(req: NextRequest) {
       }));
 
     // Manual fixings (includes manual overrides) within the same date range
+    // Manual fixings table is typically small, but we still query by range.
     const { data: manualRows, error: manualErr } = await supabase
       .from("manual_fixings")
       .select("id, as_of_date, rate_mid, is_official, is_manual_override, notes, created_at, created_email")
@@ -139,6 +212,12 @@ export async function GET(req: NextRequest) {
       maxDate: maxDateStr,
       history,
       manualFixings,
+      meta: {
+        rawMinDate: earliestDate,
+        rawMaxDate: latestDate,
+        count: history.length,
+        manualCount: manualFixings.length,
+      },
     });
   } catch (err) {
     console.error("Anchor history route crashed:", err);
