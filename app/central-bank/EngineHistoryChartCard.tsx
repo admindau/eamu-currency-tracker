@@ -26,7 +26,7 @@ ChartJS.register(
   zoomPlugin
 );
 
-// ✅ Removed "all"
+// ✅ Baseline chart keeps existing windows
 const WINDOWS = ["15d", "30d", "90d", "365d"] as const;
 type WindowKey = (typeof WINDOWS)[number];
 
@@ -180,7 +180,6 @@ export default function EngineHistoryChartCard() {
           },
         },
         zoom: {
-          // Recommendation: wheel zoom + drag pan (best desktop UX)
           zoom: {
             wheel: { enabled: true },
             pinch: { enabled: true },
@@ -231,7 +230,7 @@ export default function EngineHistoryChartCard() {
       <div className="flex items-start justify-between gap-3">
         <div className="min-w-0">
           <h3 className="text-sm font-semibold tracking-wide text-zinc-200">
-            Engine history
+            Engine history (baseline)
           </h3>
           <p className="mt-1 text-xs text-zinc-500">
             Select a pair and window. Zoom with mouse wheel; pan by dragging.
@@ -242,7 +241,6 @@ export default function EngineHistoryChartCard() {
         </div>
 
         <div className="flex flex-col items-end gap-2">
-          {/* Window selector */}
           <div className="inline-flex items-center gap-1 rounded-full bg-zinc-900/70 p-1 text-[11px]">
             {WINDOWS.map((w) => {
               const isActive = activeWindow === w;
@@ -274,7 +272,6 @@ export default function EngineHistoryChartCard() {
         </div>
       </div>
 
-      {/* Pair selector */}
       <div className="flex items-center justify-between gap-3">
         <div className="flex min-w-0 items-center gap-2">
           <span className="text-[11px] text-zinc-500">Pair</span>
@@ -296,8 +293,7 @@ export default function EngineHistoryChartCard() {
 
         {data?.source ? (
           <span className="text-[11px] text-zinc-600">
-            Source:{" "}
-            <span className="font-mono text-zinc-500">{data.source}</span>
+            Source: <span className="font-mono text-zinc-500">{data.source}</span>
           </span>
         ) : null}
       </div>

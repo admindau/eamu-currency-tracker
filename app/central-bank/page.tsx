@@ -24,6 +24,27 @@ const EngineHistoryChartCard = dynamic(() => import("./EngineHistoryChartCard"),
   ),
 });
 
+// ✅ NEW: v2 chart (overlays + inspection + All)
+const EngineHistoryChartV2 = dynamic(
+  () => import("@/components/EngineHistoryChartV2"),
+  {
+    ssr: false,
+    loading: () => (
+      <section className="flex flex-col gap-3 rounded-2xl border border-zinc-800 bg-black/40 px-5 pb-4 pt-4">
+        <div className="flex items-center justify-between gap-3">
+          <div>
+            <h3 className="text-sm font-semibold tracking-wide text-zinc-200">
+              Engine history (v2)
+            </h3>
+            <p className="mt-1 text-xs text-zinc-500">Loading chart…</p>
+          </div>
+        </div>
+        <div className="mt-2 h-56 w-full overflow-hidden rounded-xl border border-zinc-800 bg-zinc-950/80 px-3 py-2" />
+      </section>
+    ),
+  }
+);
+
 type SupabaseUser = {
   id: string;
   email?: string;
@@ -1061,9 +1082,10 @@ export default function CentralBankDashboardPage() {
           </div>
         </section>
 
-        {/* ✅ FULL-WIDTH CHART AT THE BOTTOM */}
-        <section className="rounded-2xl">
+        {/* ✅ FULL-WIDTH CHARTS AT THE BOTTOM */}
+        <section className="space-y-6 rounded-2xl">
           <EngineHistoryChartCard />
+          <EngineHistoryChartV2 />
         </section>
       </div>
     </main>
