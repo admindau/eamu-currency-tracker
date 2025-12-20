@@ -44,67 +44,32 @@ type ManualFixingPoint = {
   createdEmail: string | null;
 };
 
-async function getPairMinMax(params: { base: string; quote: string }) {
-  const supabase = supabaseServer;
-
-  const { data: maxRows, error: maxErr } = await supabase
-    .from("fx_daily_rates_default")
-    .select("as_of_date")
-    .eq("base_currency", params.base)
-    .eq("quote_currency", params.quote)
-    .order("as_of_date", { ascending: false })
-    .limit(1);
-
-  if (maxErr) throw maxErr;
-  if (!maxRows || maxRows.length === 0) return null;
-
-  const { data: minRows, error: minErr } = await supabase
-    .from("fx_daily_rates_default")
-    .select("as_of_date")
-    .eq("base_currency", params.base)
-    .eq("quote_currency", params.quote)
-    .order("as_of_date", { ascending: true })
-    .limit(1);
-
-  if (minErr) throw minErr;
-  if (!minRows || minRows.length === 0) return null;
-
-  return {
-    minDate: String(minRows[0].as_of_date),
-    maxDate: String(maxRows[0].as_of_date),
-  };
-}
-
-/**
- * PostgREST default page size behavior is a common source of truncation.
- * We paginate explicitly with range() for "all" windows.
- */
-async function fetchHistoryAll(params: { base: string; quote: string }) {
-  const supabase = supabaseServer;
-  const pageSize = 1000;
-
-  const out: { as_of_date: string; rate_mid: number | null }[] = [];
-  let offset = 0;
+async function fetchAllPaged<T>(
+  queryBuilder: any,
+  pageSize = 1000,
+  hardCap = 200000
+): Promise<{ rows: T[]; pages: number }> {
+  const out: T[] = [];
+  let from = 0;
+  let pages = 0;
 
   while (true) {
-    const { data, error } = await supabase
-      .from("fx_daily_rates_default")
-      .select("as_of_date, rate_mid")
-      .eq("base_currency", params.base)
-      .eq("quote_currency", params.quote)
-      .order("as_of_date", { ascending: true })
-      .range(offset, offset + pageSize - 1);
+    const to = from + pageSize - 1;
+    const res = await queryBuilder.range(from, to);
 
-    if (error) throw error;
+    if (res.error) throw res.error;
 
-    const batch = (data ?? []) as { as_of_date: string; rate_mid: number | null }[];
+    const batch: T[] = (res.data ?? []) as T[];
     out.push(...batch);
+    pages += 1;
 
     if (batch.length < pageSize) break;
-    offset += pageSize;
+
+    from += pageSize;
+    if (out.length >= hardCap) break;
   }
 
-  return out;
+  return { rows: out, pages };
 }
 
 export async function GET(req: NextRequest) {
@@ -119,13 +84,37 @@ export async function GET(req: NextRequest) {
     const pairParamRaw = (url.searchParams.get("pair") ?? DEFAULT_PAIR).toUpperCase();
     const { base, quote } = parsePair(pairParamRaw);
 
-    const bounds = await getPairMinMax({ base, quote });
-    if (!bounds) {
-      return NextResponse.json({ error: "No anchor history available for this pair" }, { status: 404 });
+    const supabase = supabaseServer;
+
+    // Pull full history for this pair (ascending) — IMPORTANT: PAGINATE
+    const baseQuery = supabase
+      .from("fx_daily_rates_default")
+      .select("as_of_date, rate_mid")
+      .eq("base_currency", base)
+      .eq("quote_currency", quote)
+      .order("as_of_date", { ascending: true });
+
+    let rows: { as_of_date: string; rate_mid: number | null }[] = [];
+    try {
+      const paged = await fetchAllPaged<{ as_of_date: string; rate_mid: number | null }>(
+        baseQuery,
+        1000
+      );
+      rows = paged.rows ?? [];
+    } catch (e: any) {
+      console.error("Error fetching full anchor history (paged):", e);
+      return NextResponse.json({ error: "Failed to fetch anchor history" }, { status: 500 });
     }
 
-    const earliestDate = bounds.minDate;
-    const latestDate = bounds.maxDate;
+    if (!rows.length) {
+      return NextResponse.json(
+        { error: "No anchor history available for this pair" },
+        { status: 404 }
+      );
+    }
+
+    const earliestDate = rows[0].as_of_date;
+    const latestDate = rows[rows.length - 1].as_of_date;
     const latestTs = toUtcTs(latestDate);
 
     // Decide the effective min date (calendar window inclusive)
@@ -143,31 +132,7 @@ export async function GET(req: NextRequest) {
 
     const maxDateStr = latestDate;
 
-    const supabase = supabaseServer;
-
-    // Fetch history for the requested window
-    let rows: { as_of_date: string; rate_mid: number | null }[] = [];
-
-    if (windowParam === "all") {
-      // MUST paginate or it will truncate around 1000 rows (~May 2025 from Aug 2022)
-      rows = await fetchHistoryAll({ base, quote });
-    } else {
-      const { data, error } = await supabase
-        .from("fx_daily_rates_default")
-        .select("as_of_date, rate_mid")
-        .eq("base_currency", base)
-        .eq("quote_currency", quote)
-        .gte("as_of_date", minDateStr)
-        .lte("as_of_date", maxDateStr)
-        .order("as_of_date", { ascending: true });
-
-      if (error) {
-        console.error("Error fetching anchor history window:", error);
-        return NextResponse.json({ error: "Failed to fetch anchor history" }, { status: 500 });
-      }
-      rows = (data ?? []) as { as_of_date: string; rate_mid: number | null }[];
-    }
-
+    // Apply windowing in memory (stable and deterministic)
     const history: HistoryPoint[] = rows
       .filter((row) => toUtcTs(row.as_of_date) >= minTs)
       .filter((row) => row.rate_mid !== null && Number.isFinite(Number(row.rate_mid)))
@@ -177,7 +142,6 @@ export async function GET(req: NextRequest) {
       }));
 
     // Manual fixings (includes manual overrides) within the same date range
-    // Manual fixings table is typically small, but we still query by range.
     const { data: manualRows, error: manualErr } = await supabase
       .from("manual_fixings")
       .select("id, as_of_date, rate_mid, is_official, is_manual_override, notes, created_at, created_email")
@@ -212,12 +176,6 @@ export async function GET(req: NextRequest) {
       maxDate: maxDateStr,
       history,
       manualFixings,
-      meta: {
-        rawMinDate: earliestDate,
-        rawMaxDate: latestDate,
-        count: history.length,
-        manualCount: manualFixings.length,
-      },
     });
   } catch (err) {
     console.error("Anchor history route crashed:", err);

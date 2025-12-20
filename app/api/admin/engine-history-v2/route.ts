@@ -30,11 +30,39 @@ function parsePair(pair: string) {
   if (a === "SSP") return { base: "SSP", quote: b, label: `${b}/SSP` };
   if (b === "SSP") return { base: "SSP", quote: a, label: `${a}/SSP` };
 
-  // Fallback: anchor on SSP (your platform's default anchor)
+  // Fallback: anchor on SSP
   return { base: "SSP", quote: a, label: `${a}/SSP` };
 }
 
 type Point = { date: string; mid: number };
+
+async function fetchAllPaged<T>(
+  queryBuilder: any,
+  pageSize = 1000,
+  hardCap = 200000
+): Promise<{ rows: T[]; pages: number }> {
+  const out: T[] = [];
+  let from = 0;
+  let pages = 0;
+
+  while (true) {
+    const to = from + pageSize - 1;
+    const res = await queryBuilder.range(from, to);
+
+    if (res.error) throw res.error;
+
+    const batch: T[] = (res.data ?? []) as T[];
+    out.push(...batch);
+    pages += 1;
+
+    if (batch.length < pageSize) break;
+
+    from += pageSize;
+    if (out.length >= hardCap) break;
+  }
+
+  return { rows: out, pages };
+}
 
 export async function GET(req: NextRequest) {
   try {
@@ -42,7 +70,11 @@ export async function GET(req: NextRequest) {
 
     const windowRaw = (url.searchParams.get("window") ?? "90d").toLowerCase();
     const window: WindowKey =
-      windowRaw === "15d" || windowRaw === "30d" || windowRaw === "90d" || windowRaw === "365d" || windowRaw === "all"
+      windowRaw === "15d" ||
+      windowRaw === "30d" ||
+      windowRaw === "90d" ||
+      windowRaw === "365d" ||
+      windowRaw === "all"
         ? (windowRaw as WindowKey)
         : "90d";
 
@@ -51,20 +83,26 @@ export async function GET(req: NextRequest) {
 
     const supabase = supabaseServer;
 
-    // 1) Fetch ALL official history for canonical (base=SSP, quote=XYZ)
-    const { data: allRows, error: allErr } = await supabase
+    // 1) Fetch ALL official history (paged) for (base=SSP, quote=XYZ)
+    const officialQuery = supabase
       .from("fx_daily_rates_default")
       .select("as_of_date, rate_mid")
       .eq("base_currency", base)
       .eq("quote_currency", quote)
       .order("as_of_date", { ascending: true });
 
-    if (allErr) {
-      console.error("engine-history-v2 official fetch error:", allErr);
+    let rows: { as_of_date: string; rate_mid: number | null }[] = [];
+    try {
+      const paged = await fetchAllPaged<{ as_of_date: string; rate_mid: number | null }>(
+        officialQuery,
+        1000
+      );
+      rows = paged.rows ?? [];
+    } catch (e: any) {
+      console.error("engine-history-v2 official fetch error (paged):", e);
       return NextResponse.json({ error: "Failed to fetch official history" }, { status: 500 });
     }
 
-    const rows = (allRows ?? []) as { as_of_date: string; rate_mid: number | null }[];
     if (!rows.length) {
       return NextResponse.json({ error: "No official history for this pair" }, { status: 404 });
     }
@@ -92,7 +130,7 @@ export async function GET(req: NextRequest) {
       .filter((r) => r.rate_mid !== null && Number.isFinite(Number(r.rate_mid)))
       .map((r) => ({ date: r.as_of_date, mid: Number(r.rate_mid) }));
 
-    // 2) Manual fixings (including overrides) for same window
+    // 2) Manual fixings for same window
     const { data: manualRows, error: manualErr } = await supabase
       .from("manual_fixings")
       .select("id, as_of_date, rate_mid, is_official, is_manual_override, notes, created_at, created_email")
@@ -120,7 +158,7 @@ export async function GET(req: NextRequest) {
         createdEmail: (r.created_email ?? null) as string | null,
       }));
 
-    // 3) Effective series: apply manual overrides (not non-override manual fixings)
+    // 3) Effective series: apply manual overrides only
     const manualByDate = new Map<string, (typeof manualFixings)[number]>();
     for (const m of manualFixings) manualByDate.set(m.date, m);
 
