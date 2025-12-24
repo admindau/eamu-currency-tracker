@@ -6,6 +6,11 @@ import {
   computeSeriesAnalytics,
   formatSigned,
 } from "@/lib/fx/seriesAnalytics";
+import {
+  buildRegimeSegments,
+  classifyRegimes,
+  regimeStrokeFor,
+} from "@/lib/fx/regimeDetection";
 
 type WindowKey = "15d" | "30d" | "90d" | "365d" | "all";
 type Mode = "official" | "effective" | "both";
@@ -57,13 +62,15 @@ function formatMode(m: Mode) {
 export default function EngineHistoryChartV2() {
   const wrapperRef = useRef<HTMLDivElement | null>(null);
 
-  // Keep value convention consistent with baseline chart: base+quote (SSPUSD)
   const [pair, setPair] = useState<string>("SSPUSD");
   const [windowKey, setWindowKey] = useState<WindowKey>("all");
   const [mode, setMode] = useState<Mode>("both");
 
-  // Phase 1: overlay toggle(s)
+  // Phase 1 overlays
   const [showVolatility, setShowVolatility] = useState<boolean>(false);
+
+  // Phase 2 overlays
+  const [showRegimes, setShowRegimes] = useState<boolean>(true);
 
   const [data, setData] = useState<ApiResponse | null>(null);
   const [loading, setLoading] = useState(false);
@@ -153,7 +160,33 @@ export default function EngineHistoryChartV2() {
     return analytics.reduce((acc, a) => Math.max(acc, a.volPct ?? 0), 0);
   }, [analytics]);
 
-  const volOverlayH = 28; // px inside chart area
+  const volOverlayH = 28;
+
+  // Phase 2 regimes (deterministic, rule-based)
+  const volBucketByIdx = (idx: number) =>
+    bucketVolPct(analytics[idx]?.volPct ?? null);
+
+  const hasManualOverrideByIdx = (idx: number) => {
+    const pt = snapSeries[idx];
+    if (!pt) return false;
+    const mf = manualByDate.get(pt.date);
+    return Boolean(mf?.isManualOverride);
+  };
+
+  const regimes = useMemo(() => {
+    if (!hasSeries || analytics.length !== snapSeries.length) return [];
+    return classifyRegimes(analytics, volBucketByIdx, hasManualOverrideByIdx, {
+      slopeWindow: 14,
+      driftSlopeAbsPctPerDay: 0.06,
+      shockJumpThresholdPct: 5,
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [hasSeries, analytics, snapSeries, manualByDate]);
+
+  const regimeSegments = useMemo(() => {
+    if (!regimes.length) return [];
+    return buildRegimeSegments(regimes);
+  }, [regimes]);
 
   // SVG layout
   const width = 920;
@@ -240,12 +273,19 @@ export default function EngineHistoryChartV2() {
       ? analytics[activeIdx]
       : null;
 
+  const activeRegime =
+    activeIdx !== null && regimes.length > activeIdx ? regimes[activeIdx] : null;
+
   // Styling tuned for black UI
   const gridStroke = "rgba(255,255,255,0.08)";
   const axisStroke = "rgba(255,255,255,0.12)";
   const officialStroke = "rgba(255,255,255,0.92)";
   const effectiveStroke = "rgba(16,185,129,0.95)"; // emerald
   const tooltipBg = "rgba(0,0,0,0.92)";
+
+  // Regime rail geometry
+  const regimeRailY = paddingY + 2;
+  const regimeRailH = 6;
 
   return (
     <section className="flex flex-col gap-3 rounded-2xl border border-zinc-800 bg-black/40 px-5 pb-4 pt-4">
@@ -306,8 +346,22 @@ export default function EngineHistoryChartV2() {
             })}
           </div>
 
-          {/* Phase 1: overlays */}
+          {/* Overlays */}
           <div className="inline-flex items-center gap-1 rounded-full bg-zinc-900/70 p-1 text-[11px]">
+            <button
+              type="button"
+              onClick={() => setShowRegimes((v) => !v)}
+              className={[
+                "rounded-full px-3 py-1 transition",
+                showRegimes
+                  ? "bg-zinc-100 text-black shadow-sm"
+                  : "text-zinc-400 hover:text-zinc-100",
+              ].join(" ")}
+              title="Toggle regime rail"
+            >
+              Regimes
+            </button>
+
             <button
               type="button"
               onClick={() => setShowVolatility((v) => !v)}
@@ -411,7 +465,31 @@ export default function EngineHistoryChartV2() {
                 strokeWidth={1}
               />
 
-              {/* Phase 1: volatility overlay (scaled bars from chart baseline) */}
+              {/* Phase 2: regime rail */}
+              {showRegimes &&
+                regimeSegments.length > 0 &&
+                snapSeries.length >= 2 && (
+                  <g aria-label="regime-rail">
+                    {regimeSegments.map((seg, si) => {
+                      const x1 = paddingX + seg.fromIdx * stepX;
+                      const x2 = paddingX + seg.toIdx * stepX;
+                      const w = Math.max(1, x2 - x1);
+                      return (
+                        <rect
+                          key={`reg-${si}-${seg.fromIdx}-${seg.toIdx}`}
+                          x={x1}
+                          y={regimeRailY}
+                          width={w}
+                          height={regimeRailH}
+                          rx={2}
+                          fill={regimeStrokeFor(seg.key)}
+                        />
+                      );
+                    })}
+                  </g>
+                )}
+
+              {/* Phase 1: volatility overlay */}
               {showVolatility &&
                 maxVol > 0 &&
                 analytics.length === snapSeries.length && (
@@ -421,7 +499,7 @@ export default function EngineHistoryChartV2() {
                       const v = a.volPct ?? 0;
                       if (!Number.isFinite(v) || v <= 0) return null;
                       const x = paddingX + i * stepX;
-                      const h = (v / maxVol) * volOverlayH;
+                      const h = (v / maxVol) * 28;
                       const y2 = height - paddingY;
                       const y1 = y2 - h;
                       return (
@@ -493,7 +571,13 @@ export default function EngineHistoryChartV2() {
                 </>
               )}
 
-              <rect x={0} y={0} width={width} height={height} fill="transparent" />
+              <rect
+                x={0}
+                y={0}
+                width={width}
+                height={height}
+                fill="transparent"
+              />
             </svg>
 
             {/* Tooltip */}
@@ -507,7 +591,9 @@ export default function EngineHistoryChartV2() {
                 }}
               >
                 <div className="text-zinc-300">{activePoint.date}</div>
-                <div className="tabular-nums">{activePoint.mid.toLocaleString()}</div>
+                <div className="tabular-nums">
+                  {activePoint.mid.toLocaleString()}
+                </div>
 
                 {activeA?.pctDelta !== null &&
                 activeA?.pctDelta !== undefined &&
@@ -515,6 +601,10 @@ export default function EngineHistoryChartV2() {
                   <div className="text-zinc-400 tabular-nums">
                     {formatSigned(activeA.pctDelta, 2)}%
                   </div>
+                ) : null}
+
+                {activeRegime ? (
+                  <div className="text-zinc-400">{activeRegime.label}</div>
                 ) : null}
 
                 {activeManual ? (
@@ -547,8 +637,25 @@ export default function EngineHistoryChartV2() {
 
           <div className="mt-1 text-sm text-zinc-100">
             {activePoint.date} •{" "}
-            <span className="tabular-nums">{activePoint.mid.toLocaleString()}</span>
+            <span className="tabular-nums">
+              {activePoint.mid.toLocaleString()}
+            </span>
           </div>
+
+          {/* Phase 2: regime context */}
+          {activeRegime ? (
+            <div className="mt-2 rounded-xl border border-zinc-900 bg-black/30 px-3 py-2">
+              <div className="text-[10px] uppercase tracking-[0.18em] text-zinc-500">
+                Regime
+              </div>
+              <div className="mt-1 text-[12px] text-zinc-200">
+                {activeRegime.label}
+              </div>
+              <div className="mt-0.5 text-[11px] text-zinc-500">
+                {activeRegime.reason}
+              </div>
+            </div>
+          ) : null}
 
           {/* Phase 1: analytics summary */}
           {activeA ? (
@@ -562,7 +669,9 @@ export default function EngineHistoryChartV2() {
                     ? "—"
                     : `${activeA.delta > 0 ? "+" : activeA.delta < 0 ? "−" : ""}${Math.abs(
                         activeA.delta
-                      ).toLocaleString("en-US", { maximumFractionDigits: 6 })}`}
+                      ).toLocaleString("en-US", {
+                        maximumFractionDigits: 6,
+                      })}`}
                 </div>
                 <div className="mt-0.5 text-[11px] text-zinc-500 tabular-nums">
                   {activeA.pctDelta === null || !Number.isFinite(activeA.pctDelta)
@@ -641,7 +750,8 @@ export default function EngineHistoryChartV2() {
       <p className="mt-1 text-[11px] leading-relaxed text-zinc-500">
         v2 adds an “All” window and overlays from{" "}
         <span className="font-mono">manual_fixings</span>. Use “Effective” to see
-        applied overrides.
+        applied overrides. Phase 2 adds a deterministic regime rail (Stable /
+        Drift / Shock / Intervention).
       </p>
     </section>
   );
