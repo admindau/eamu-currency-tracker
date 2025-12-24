@@ -11,6 +11,11 @@ import {
   classifyRegimes,
   regimeStrokeFor,
 } from "@/lib/fx/regimeDetection";
+import {
+  confidenceStyle,
+  scoreConfidence,
+  type ConfidenceResult,
+} from "@/lib/fx/confidenceScoring";
 
 type WindowKey = "15d" | "30d" | "90d" | "365d" | "all";
 type Mode = "official" | "effective" | "both";
@@ -66,11 +71,12 @@ export default function EngineHistoryChartV2() {
   const [windowKey, setWindowKey] = useState<WindowKey>("all");
   const [mode, setMode] = useState<Mode>("both");
 
-  // Phase 1 overlays
+  // Overlays
+  const [showRegimes, setShowRegimes] = useState<boolean>(true);
   const [showVolatility, setShowVolatility] = useState<boolean>(false);
 
-  // Phase 2 overlays
-  const [showRegimes, setShowRegimes] = useState<boolean>(true);
+  // Phase 3
+  const [showConfidence, setShowConfidence] = useState<boolean>(true);
 
   const [data, setData] = useState<ApiResponse | null>(null);
   const [loading, setLoading] = useState(false);
@@ -78,6 +84,8 @@ export default function EngineHistoryChartV2() {
 
   const [hoverIdx, setHoverIdx] = useState<number | null>(null);
   const [lockedIdx, setLockedIdx] = useState<number | null>(null);
+
+  // Optional: retained for “locked metadata”, but we no longer use it for the main inspector state.
   const [selectedManual, setSelectedManual] = useState<ManualFixing | null>(
     null
   );
@@ -188,6 +196,41 @@ export default function EngineHistoryChartV2() {
     return buildRegimeSegments(regimes);
   }, [regimes]);
 
+  // ---- Phase 3 confidence scoring ----
+  const confidenceByIdx: ConfidenceResult[] = useMemo(() => {
+    if (!hasSeries || analytics.length !== snapSeries.length) return [];
+
+    return snapSeries.map((pt, idx) => {
+      const mf = manualByDate.get(pt.date);
+      const a = analytics[idx];
+      const vb = volBucketByIdx(idx);
+      const hasVolHistory = a?.volPct !== null && a?.volPct !== undefined;
+
+      return scoreConfidence({
+        idx,
+        total: snapSeries.length,
+        hasManualFixing: Boolean(mf),
+        hasManualOverride: Boolean(mf?.isManualOverride),
+        isJump: Boolean(a?.isJump),
+        volBucket: vb,
+        regimeKey: regimes[idx]?.key ?? "unknown",
+        hasVolHistory,
+      });
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [hasSeries, analytics, snapSeries, manualByDate, regimes]);
+
+  // Downsample confidence dots for performance and to avoid clutter.
+  const confidenceDotIdxs = useMemo(() => {
+    const n = snapSeries.length;
+    if (!hasSeries || n < 2) return [];
+    const step = Math.max(1, Math.ceil(n / 260)); // ~260 dots max
+    const idxs: number[] = [];
+    for (let i = 0; i < n; i += step) idxs.push(i);
+    if (idxs[idxs.length - 1] !== n - 1) idxs.push(n - 1);
+    return idxs;
+  }, [hasSeries, snapSeries.length]);
+
   // SVG layout
   const width = 920;
   const height = 260;
@@ -264,6 +307,7 @@ export default function EngineHistoryChartV2() {
   const activePoint = activeIdx !== null ? snapSeries[activeIdx] : null;
   const activeXY =
     activePoint && activeIdx !== null ? toXY(activePoint, activeIdx) : null;
+
   const activeManual = activePoint
     ? manualByDate.get(activePoint.date) ?? null
     : null;
@@ -275,6 +319,11 @@ export default function EngineHistoryChartV2() {
 
   const activeRegime =
     activeIdx !== null && regimes.length > activeIdx ? regimes[activeIdx] : null;
+
+  const activeConfidence =
+    activeIdx !== null && confidenceByIdx.length > activeIdx
+      ? confidenceByIdx[activeIdx]
+      : null;
 
   // Styling tuned for black UI
   const gridStroke = "rgba(255,255,255,0.08)";
@@ -374,6 +423,20 @@ export default function EngineHistoryChartV2() {
               title="Toggle volatility overlay"
             >
               Volatility
+            </button>
+
+            <button
+              type="button"
+              onClick={() => setShowConfidence((v) => !v)}
+              className={[
+                "rounded-full px-3 py-1 transition",
+                showConfidence
+                  ? "bg-zinc-100 text-black shadow-sm"
+                  : "text-zinc-400 hover:text-zinc-100",
+              ].join(" ")}
+              title="Toggle confidence overlay"
+            >
+              Confidence
             </button>
           </div>
         </div>
@@ -499,7 +562,7 @@ export default function EngineHistoryChartV2() {
                       const v = a.volPct ?? 0;
                       if (!Number.isFinite(v) || v <= 0) return null;
                       const x = paddingX + i * stepX;
-                      const h = (v / maxVol) * 28;
+                      const h = (v / maxVol) * volOverlayH;
                       const y2 = height - paddingY;
                       const y1 = y2 - h;
                       return (
@@ -536,6 +599,33 @@ export default function EngineHistoryChartV2() {
                   strokeLinecap="round"
                 />
               )}
+
+              {/* Phase 3: confidence overlay dots (downsampled) */}
+              {showConfidence &&
+                confidenceByIdx.length === snapSeries.length &&
+                confidenceDotIdxs.length > 0 && (
+                  <g aria-label="confidence-overlay">
+                    {confidenceDotIdxs.map((i) => {
+                      const pt = snapSeries[i];
+                      const conf = confidenceByIdx[i];
+                      if (!pt || !conf) return null;
+                      const { x, y } = toXY(pt, i);
+                      const style = confidenceStyle(conf.level);
+                      return (
+                        <circle
+                          key={`c-${i}`}
+                          cx={x}
+                          cy={y}
+                          r={style.r}
+                          fill={style.fill}
+                          stroke={style.stroke}
+                          strokeWidth={1}
+                          opacity={style.opacity}
+                        />
+                      );
+                    })}
+                  </g>
+                )}
 
               {/* Manual markers */}
               {markerIdxs.map((i) => {
@@ -607,6 +697,12 @@ export default function EngineHistoryChartV2() {
                   <div className="text-zinc-400">{activeRegime.label}</div>
                 ) : null}
 
+                {activeConfidence ? (
+                  <div className="text-zinc-400">
+                    Confidence: {activeConfidence.label}
+                  </div>
+                ) : null}
+
                 {activeManual ? (
                   <div className="text-zinc-400">
                     {activeManual.isManualOverride
@@ -654,6 +750,25 @@ export default function EngineHistoryChartV2() {
               <div className="mt-0.5 text-[11px] text-zinc-500">
                 {activeRegime.reason}
               </div>
+            </div>
+          ) : null}
+
+          {/* Phase 3: confidence */}
+          {activeConfidence ? (
+            <div className="mt-2 rounded-xl border border-zinc-900 bg-black/30 px-3 py-2">
+              <div className="text-[10px] uppercase tracking-[0.18em] text-zinc-500">
+                Confidence
+              </div>
+              <div className="mt-1 text-[12px] text-zinc-200">
+                {activeConfidence.label}
+              </div>
+              {activeConfidence.reasons.length ? (
+                <ul className="mt-1 list-disc space-y-0.5 pl-4 text-[11px] text-zinc-500">
+                  {activeConfidence.reasons.slice(0, 4).map((r, i) => (
+                    <li key={`${r}-${i}`}>{r}</li>
+                  ))}
+                </ul>
+              ) : null}
             </div>
           ) : null}
 
@@ -714,30 +829,36 @@ export default function EngineHistoryChartV2() {
             </div>
           ) : null}
 
-          {selectedManual ? (
+          {/* Manual details — FIXED: uses activeManual so Inspector matches the active point */}
+          {activeManual ? (
             <div className="mt-3 space-y-1 text-[12px] text-zinc-300">
               <div>
                 <span className="text-zinc-500">Type:</span>{" "}
-                {selectedManual.isManualOverride
-                  ? "Manual override"
-                  : "Manual fixing"}
+                {activeManual.isManualOverride ? "Manual override" : "Manual fixing"}
               </div>
               <div>
                 <span className="text-zinc-500">Created:</span>{" "}
                 <span className="tabular-nums">
-                  {new Date(selectedManual.createdAt).toLocaleString()}
+                  {new Date(activeManual.createdAt).toLocaleString()}
                 </span>
               </div>
-              {selectedManual.createdEmail && (
+              {activeManual.createdEmail && (
                 <div>
                   <span className="text-zinc-500">By:</span>{" "}
-                  {selectedManual.createdEmail}
+                  {activeManual.createdEmail}
                 </div>
               )}
               <div>
                 <span className="text-zinc-500">Notes:</span>{" "}
-                {selectedManual.notes ?? "—"}
+                {activeManual.notes ?? "—"}
               </div>
+
+              {/* Optional: show locked selection state if different */}
+              {selectedManual && activeManual.id !== selectedManual.id ? (
+                <div className="pt-1 text-[11px] text-zinc-500">
+                  Note: a different manual entry is currently locked via click selection.
+                </div>
+              ) : null}
             </div>
           ) : (
             <div className="mt-2 text-[12px] text-zinc-500">
@@ -750,8 +871,8 @@ export default function EngineHistoryChartV2() {
       <p className="mt-1 text-[11px] leading-relaxed text-zinc-500">
         v2 adds an “All” window and overlays from{" "}
         <span className="font-mono">manual_fixings</span>. Use “Effective” to see
-        applied overrides. Phase 2 adds a deterministic regime rail (Stable /
-        Drift / Shock / Intervention).
+        applied overrides. Phase 2 adds a deterministic regime rail. Phase 3 adds
+        deterministic confidence scoring and an optional confidence overlay.
       </p>
     </section>
   );
