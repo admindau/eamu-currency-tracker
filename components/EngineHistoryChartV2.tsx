@@ -71,6 +71,50 @@ function volLabelFromBucket(v: ReturnType<typeof bucketVolPct>) {
   return "Insufficient history";
 }
 
+type SignificanceKey = "minor" | "moderate" | "material" | "significant" | "extreme";
+
+function significanceFromPct(pct: number | null): {
+  key: SignificanceKey;
+  label: string;
+  className: string;
+} | null {
+  if (pct === null || !Number.isFinite(pct)) return null;
+  const a = Math.abs(pct);
+  if (a < 2) {
+    return {
+      key: "minor",
+      label: "Minor",
+      className: "bg-zinc-900/60 text-zinc-300 border-zinc-800",
+    };
+  }
+  if (a < 5) {
+    return {
+      key: "moderate",
+      label: "Moderate",
+      className: "bg-zinc-900/60 text-zinc-200 border-zinc-700",
+    };
+  }
+  if (a < 10) {
+    return {
+      key: "material",
+      label: "Material",
+      className: "bg-zinc-900/60 text-zinc-100 border-zinc-600",
+    };
+  }
+  if (a < 20) {
+    return {
+      key: "significant",
+      label: "Significant",
+      className: "bg-amber-500/10 text-amber-200 border-amber-500/30",
+    };
+  }
+  return {
+    key: "extreme",
+    label: "Extreme",
+    className: "bg-red-500/10 text-red-200 border-red-500/30",
+  };
+}
+
 export default function EngineHistoryChartV2() {
   const wrapperRef = useRef<HTMLDivElement | null>(null);
   const commentaryAbortRef = useRef<AbortController | null>(null);
@@ -389,6 +433,9 @@ export default function EngineHistoryChartV2() {
         ? (manualMid / officialMid - 1) * 100
         : null;
 
+    const significance =
+      kind === "official_vs_manual" ? significanceFromPct(pctDiff) : null;
+
     const cacheKey = [
       "v2",
       kind,
@@ -453,6 +500,7 @@ export default function EngineHistoryChartV2() {
       payload.manualMid = manualMid;
       payload.absDiff = absDiff;
       payload.pctDiff = pctDiff;
+      payload.significanceLabel = significance?.label ?? null;
     }
 
     const t = setTimeout(async () => {
@@ -923,6 +971,9 @@ export default function EngineHistoryChartV2() {
                   const mm = activeManual.mid;
                   const abs = mm - om;
                   const pct = om !== 0 ? (mm / om - 1) * 100 : null;
+                  const sig = significanceFromPct(
+                    pct !== null && Number.isFinite(pct) ? pct : null
+                  );
                   return (
                     <div className="mt-2 rounded-xl border border-zinc-900 bg-black/20 px-3 py-2">
                       <div className="grid gap-1 sm:grid-cols-2">
@@ -951,6 +1002,21 @@ export default function EngineHistoryChartV2() {
                               ({formatSigned(pct, 2)}%)
                             </span>
                           ) : null}
+                        </div>
+
+                        <div className="text-[11px] text-zinc-500">
+                          Significance
+                        </div>
+                        <div className="text-[12px] text-zinc-200">
+                          {sig ? (
+                            <span
+                              className={`inline-flex items-center rounded-full border px-2 py-0.5 text-[11px] ${sig.className}`}
+                            >
+                              {sig.label}
+                            </span>
+                          ) : (
+                            <span className="text-[11px] text-zinc-500">—</span>
+                          )}
                         </div>
                       </div>
                     </div>

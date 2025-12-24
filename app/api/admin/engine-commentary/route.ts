@@ -45,6 +45,9 @@ type CommentaryRequest = {
   manualMid?: number | null;
   absDiff?: number | null;
   pctDiff?: number | null;
+
+  // Deterministic significance classification from the client (optional)
+  significanceLabel?: string | null;
 };
 
 type CacheEntry = {
@@ -143,6 +146,8 @@ function stableKeyFromPayload(p: CommentaryRequest) {
       p.pctDiff === null || p.pctDiff === undefined
         ? null
         : Math.round(p.pctDiff * 100) / 100,
+
+    significance: p.significanceLabel ?? null,
   };
 
   return JSON.stringify(keyObj);
@@ -186,6 +191,9 @@ function buildPrompt(d: CommentaryRequest) {
 
     if (d.pctDiff !== null && d.pctDiff !== undefined)
       lines.push(`PCT DEVIATION: ${d.pctDiff}%`);
+
+    if (d.significanceLabel)
+      lines.push(`SIGNIFICANCE: ${d.significanceLabel}`);
   }
 
   if (d.delta !== null && d.delta !== undefined) lines.push(`Δ DAY: ${d.delta}`);
@@ -263,6 +271,8 @@ export async function POST(req: NextRequest) {
       manualMid: toNum(body?.manualMid),
       absDiff: toNum(body?.absDiff),
       pctDiff: toNum(body?.pctDiff),
+
+      significanceLabel: cleanStr(body?.significanceLabel),
     };
 
     if (!Number.isFinite(payload.mid)) {
