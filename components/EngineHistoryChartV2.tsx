@@ -1,8 +1,13 @@
 "use client";
 
 import React, { useEffect, useMemo, useRef, useState } from "react";
+import {
+  bucketVolPct,
+  computeSeriesAnalytics,
+  formatSigned,
+} from "@/lib/fx/seriesAnalytics";
 
-type WindowKey = "15d" | "30d" | "30d" | "90d" | "365d" | "all";
+type WindowKey = "15d" | "30d" | "90d" | "365d" | "all";
 type Mode = "official" | "effective" | "both";
 
 type Point = { date: string; mid: number };
@@ -56,6 +61,9 @@ export default function EngineHistoryChartV2() {
   const [pair, setPair] = useState<string>("SSPUSD");
   const [windowKey, setWindowKey] = useState<WindowKey>("all");
   const [mode, setMode] = useState<Mode>("both");
+
+  // Phase 1: overlay toggle(s)
+  const [showVolatility, setShowVolatility] = useState<boolean>(false);
 
   const [data, setData] = useState<ApiResponse | null>(null);
   const [loading, setLoading] = useState(false);
@@ -129,6 +137,23 @@ export default function EngineHistoryChartV2() {
   }, [mode, primarySeries, official, effective]);
 
   const hasSeries = snapSeries.length >= 2;
+
+  // Phase 1 analytics (deterministic)
+  const analytics = useMemo(() => {
+    if (!hasSeries) return [];
+    return computeSeriesAnalytics(snapSeries, {
+      volWindow: 7,
+      jumpThresholdPct: 5,
+      flatEpsilon: 0,
+    });
+  }, [hasSeries, snapSeries]);
+
+  const maxVol = useMemo(() => {
+    if (!analytics.length) return 0;
+    return analytics.reduce((acc, a) => Math.max(acc, a.volPct ?? 0), 0);
+  }, [analytics]);
+
+  const volOverlayH = 28; // px inside chart area
 
   // SVG layout
   const width = 920;
@@ -210,6 +235,11 @@ export default function EngineHistoryChartV2() {
     ? manualByDate.get(activePoint.date) ?? null
     : null;
 
+  const activeA =
+    activeIdx !== null && analytics.length > activeIdx
+      ? analytics[activeIdx]
+      : null;
+
   // Styling tuned for black UI
   const gridStroke = "rgba(255,255,255,0.08)";
   const axisStroke = "rgba(255,255,255,0.12)";
@@ -275,6 +305,23 @@ export default function EngineHistoryChartV2() {
               );
             })}
           </div>
+
+          {/* Phase 1: overlays */}
+          <div className="inline-flex items-center gap-1 rounded-full bg-zinc-900/70 p-1 text-[11px]">
+            <button
+              type="button"
+              onClick={() => setShowVolatility((v) => !v)}
+              className={[
+                "rounded-full px-3 py-1 transition",
+                showVolatility
+                  ? "bg-zinc-100 text-black shadow-sm"
+                  : "text-zinc-400 hover:text-zinc-100",
+              ].join(" ")}
+              title="Toggle volatility overlay"
+            >
+              Volatility
+            </button>
+          </div>
         </div>
       </div>
 
@@ -332,7 +379,6 @@ export default function EngineHistoryChartV2() {
         {!loading && !err && hasSeries && (
           <div className="relative">
             <svg
-              // ✅ FIXED: correct viewBox
               viewBox={`0 0 ${width} ${height}`}
               className="h-56 w-full"
               onMouseMove={(e) => onMove(e.clientX)}
@@ -365,6 +411,34 @@ export default function EngineHistoryChartV2() {
                 strokeWidth={1}
               />
 
+              {/* Phase 1: volatility overlay (scaled bars from chart baseline) */}
+              {showVolatility &&
+                maxVol > 0 &&
+                analytics.length === snapSeries.length && (
+                  <g aria-label="volatility-overlay">
+                    {analytics.map((a, i) => {
+                      if (i === 0) return null;
+                      const v = a.volPct ?? 0;
+                      if (!Number.isFinite(v) || v <= 0) return null;
+                      const x = paddingX + i * stepX;
+                      const h = (v / maxVol) * volOverlayH;
+                      const y2 = height - paddingY;
+                      const y1 = y2 - h;
+                      return (
+                        <line
+                          key={`vol-${i}`}
+                          x1={x}
+                          y1={y1}
+                          x2={x}
+                          y2={y2}
+                          stroke="rgba(255,255,255,0.18)"
+                          strokeWidth={1}
+                        />
+                      );
+                    })}
+                  </g>
+                )}
+
               {(mode === "official" || mode === "both") && (
                 <path
                   d={pathOfficial}
@@ -395,13 +469,7 @@ export default function EngineHistoryChartV2() {
                   ? "rgba(245,158,11,0.95)" // amber
                   : "rgba(212,212,216,0.9)"; // zinc
                 return (
-                  <circle
-                    key={pt.date}
-                    cx={x}
-                    cy={y}
-                    r={r}
-                    fill={fill}
-                  />
+                  <circle key={pt.date} cx={x} cy={y} r={r} fill={fill} />
                 );
               })}
 
@@ -425,13 +493,7 @@ export default function EngineHistoryChartV2() {
                 </>
               )}
 
-              <rect
-                x={0}
-                y={0}
-                width={width}
-                height={height}
-                fill="transparent"
-              />
+              <rect x={0} y={0} width={width} height={height} fill="transparent" />
             </svg>
 
             {/* Tooltip */}
@@ -445,9 +507,16 @@ export default function EngineHistoryChartV2() {
                 }}
               >
                 <div className="text-zinc-300">{activePoint.date}</div>
-                <div className="tabular-nums">
-                  {activePoint.mid.toLocaleString()}
-                </div>
+                <div className="tabular-nums">{activePoint.mid.toLocaleString()}</div>
+
+                {activeA?.pctDelta !== null &&
+                activeA?.pctDelta !== undefined &&
+                Number.isFinite(activeA.pctDelta) ? (
+                  <div className="text-zinc-400 tabular-nums">
+                    {formatSigned(activeA.pctDelta, 2)}%
+                  </div>
+                ) : null}
+
                 {activeManual ? (
                   <div className="text-zinc-400">
                     {activeManual.isManualOverride
@@ -478,13 +547,66 @@ export default function EngineHistoryChartV2() {
 
           <div className="mt-1 text-sm text-zinc-100">
             {activePoint.date} •{" "}
-            <span className="tabular-nums">
-              {activePoint.mid.toLocaleString()}
-            </span>
+            <span className="tabular-nums">{activePoint.mid.toLocaleString()}</span>
           </div>
 
+          {/* Phase 1: analytics summary */}
+          {activeA ? (
+            <div className="mt-3 grid gap-2 sm:grid-cols-3">
+              <div className="rounded-xl border border-zinc-900 bg-black/30 px-3 py-2">
+                <div className="text-[10px] uppercase tracking-[0.18em] text-zinc-500">
+                  Δ Day
+                </div>
+                <div className="mt-1 text-[12px] text-zinc-200 tabular-nums">
+                  {activeA.delta === null || !Number.isFinite(activeA.delta)
+                    ? "—"
+                    : `${activeA.delta > 0 ? "+" : activeA.delta < 0 ? "−" : ""}${Math.abs(
+                        activeA.delta
+                      ).toLocaleString("en-US", { maximumFractionDigits: 6 })}`}
+                </div>
+                <div className="mt-0.5 text-[11px] text-zinc-500 tabular-nums">
+                  {activeA.pctDelta === null || !Number.isFinite(activeA.pctDelta)
+                    ? ""
+                    : `${formatSigned(activeA.pctDelta, 2)}%`}
+                </div>
+              </div>
+
+              <div className="rounded-xl border border-zinc-900 bg-black/30 px-3 py-2">
+                <div className="text-[10px] uppercase tracking-[0.18em] text-zinc-500">
+                  Volatility
+                </div>
+                <div className="mt-1 text-[12px] text-zinc-200 tabular-nums">
+                  {activeA.volPct === null || !Number.isFinite(activeA.volPct)
+                    ? "—"
+                    : `${activeA.volPct.toFixed(3)}%`}
+                </div>
+                <div className="mt-0.5 text-[11px] text-zinc-500">
+                  {bucketVolPct(activeA.volPct) === "unknown"
+                    ? "Insufficient history"
+                    : bucketVolPct(activeA.volPct) === "low"
+                      ? "Low (7d)"
+                      : bucketVolPct(activeA.volPct) === "elevated"
+                        ? "Elevated (7d)"
+                        : "High (7d)"}
+                </div>
+              </div>
+
+              <div className="rounded-xl border border-zinc-900 bg-black/30 px-3 py-2">
+                <div className="text-[10px] uppercase tracking-[0.18em] text-zinc-500">
+                  Flags
+                </div>
+                <div className="mt-1 text-[12px] text-zinc-200">
+                  {activeA.isJump ? "Discontinuity" : "—"}
+                </div>
+                <div className="mt-0.5 text-[11px] text-zinc-500">
+                  {activeA.flatRun > 0 ? `Flat run: ${activeA.flatRun}` : ""}
+                </div>
+              </div>
+            </div>
+          ) : null}
+
           {selectedManual ? (
-            <div className="mt-2 space-y-1 text-[12px] text-zinc-300">
+            <div className="mt-3 space-y-1 text-[12px] text-zinc-300">
               <div>
                 <span className="text-zinc-500">Type:</span>{" "}
                 {selectedManual.isManualOverride
