@@ -64,8 +64,16 @@ function formatMode(m: Mode) {
   return "Both";
 }
 
+function volLabelFromBucket(v: ReturnType<typeof bucketVolPct>) {
+  if (v === "low") return "Low (7d)";
+  if (v === "elevated") return "Elevated (7d)";
+  if (v === "high") return "High (7d)";
+  return "Insufficient history";
+}
+
 export default function EngineHistoryChartV2() {
   const wrapperRef = useRef<HTMLDivElement | null>(null);
+  const commentaryAbortRef = useRef<AbortController | null>(null);
 
   const [pair, setPair] = useState<string>("SSPUSD");
   const [windowKey, setWindowKey] = useState<WindowKey>("all");
@@ -74,8 +82,6 @@ export default function EngineHistoryChartV2() {
   // Overlays
   const [showRegimes, setShowRegimes] = useState<boolean>(true);
   const [showVolatility, setShowVolatility] = useState<boolean>(false);
-
-  // Phase 3
   const [showConfidence, setShowConfidence] = useState<boolean>(true);
 
   const [data, setData] = useState<ApiResponse | null>(null);
@@ -85,10 +91,16 @@ export default function EngineHistoryChartV2() {
   const [hoverIdx, setHoverIdx] = useState<number | null>(null);
   const [lockedIdx, setLockedIdx] = useState<number | null>(null);
 
-  // Optional: retained for “locked metadata”, but we no longer use it for the main inspector state.
+  // Optional: retained for “locked metadata”
   const [selectedManual, setSelectedManual] = useState<ManualFixing | null>(
     null
   );
+
+  // Phase 4 commentary state
+  const [commentaryText, setCommentaryText] = useState<string | null>(null);
+  const [commentaryLoading, setCommentaryLoading] = useState<boolean>(false);
+  const [commentaryError, setCommentaryError] = useState<string | null>(null);
+  const commentaryCacheRef = useRef<Map<string, string>>(new Map());
 
   useEffect(() => {
     let cancelled = false;
@@ -99,6 +111,13 @@ export default function EngineHistoryChartV2() {
       setHoverIdx(null);
       setLockedIdx(null);
       setSelectedManual(null);
+
+      // Reset commentary when series changes
+      setCommentaryText(null);
+      setCommentaryError(null);
+      setCommentaryLoading(false);
+      commentaryAbortRef.current?.abort();
+      commentaryAbortRef.current = null;
 
       try {
         const res = await fetch(
@@ -153,7 +172,7 @@ export default function EngineHistoryChartV2() {
 
   const hasSeries = snapSeries.length >= 2;
 
-  // Phase 1 analytics (deterministic)
+  // Phase 1 analytics
   const analytics = useMemo(() => {
     if (!hasSeries) return [];
     return computeSeriesAnalytics(snapSeries, {
@@ -170,7 +189,7 @@ export default function EngineHistoryChartV2() {
 
   const volOverlayH = 28;
 
-  // Phase 2 regimes (deterministic, rule-based)
+  // Phase 2 regimes
   const volBucketByIdx = (idx: number) =>
     bucketVolPct(analytics[idx]?.volPct ?? null);
 
@@ -196,7 +215,7 @@ export default function EngineHistoryChartV2() {
     return buildRegimeSegments(regimes);
   }, [regimes]);
 
-  // ---- Phase 3 confidence scoring ----
+  // Phase 3 confidence scoring
   const confidenceByIdx: ConfidenceResult[] = useMemo(() => {
     if (!hasSeries || analytics.length !== snapSeries.length) return [];
 
@@ -220,7 +239,6 @@ export default function EngineHistoryChartV2() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [hasSeries, analytics, snapSeries, manualByDate, regimes]);
 
-  // Downsample confidence dots for performance and to avoid clutter.
   const confidenceDotIdxs = useMemo(() => {
     const n = snapSeries.length;
     if (!hasSeries || n < 2) return [];
@@ -325,16 +343,129 @@ export default function EngineHistoryChartV2() {
       ? confidenceByIdx[activeIdx]
       : null;
 
-  // Styling tuned for black UI
+  // Styling
   const gridStroke = "rgba(255,255,255,0.08)";
   const axisStroke = "rgba(255,255,255,0.12)";
   const officialStroke = "rgba(255,255,255,0.92)";
-  const effectiveStroke = "rgba(16,185,129,0.95)"; // emerald
+  const effectiveStroke = "rgba(16,185,129,0.95)";
   const tooltipBg = "rgba(0,0,0,0.92)";
 
   // Regime rail geometry
   const regimeRailY = paddingY + 2;
   const regimeRailH = 6;
+
+  // Phase 4: auto-generate AI commentary (debounced + cached + abortable)
+  useEffect(() => {
+    if (!hasSeries || activeIdx === null || !activePoint) return;
+
+    const modeLabel = formatMode(mode) as "Official" | "Effective" | "Both";
+    const cacheKey = [
+      pair,
+      windowKey,
+      mode,
+      activePoint.date,
+      String(activePoint.mid),
+    ].join("|");
+
+    const cached = commentaryCacheRef.current.get(cacheKey);
+    if (cached) {
+      setCommentaryText(cached);
+      setCommentaryError(null);
+      setCommentaryLoading(false);
+      return;
+    }
+
+    commentaryAbortRef.current?.abort();
+    const controller = new AbortController();
+    commentaryAbortRef.current = controller;
+
+    setCommentaryLoading(true);
+    setCommentaryError(null);
+
+    const vb = bucketVolPct(activeA?.volPct ?? null);
+    const volLabel = volLabelFromBucket(vb);
+
+    const manualLabel: "Manual override" | "Manual fixing" | "None" = activeManual
+      ? activeManual.isManualOverride
+        ? "Manual override"
+        : "Manual fixing"
+      : "None";
+
+    const payload = {
+      pairLabel: data?.displayPair ?? "—",
+      date: activePoint.date,
+      mid: activePoint.mid,
+      modeLabel,
+
+      delta: activeA?.delta ?? null,
+      pctDelta: activeA?.pctDelta ?? null,
+
+      volPct: activeA?.volPct ?? null,
+      volLabel,
+
+      regimeLabel: activeRegime?.label ?? null,
+      regimeReason: activeRegime?.reason ?? null,
+
+      confidenceLabel: activeConfidence?.label ?? null,
+      confidenceReasons: activeConfidence?.reasons ?? null,
+
+      manualLabel,
+    };
+
+    const t = setTimeout(async () => {
+      try {
+        const res = await fetch("/api/admin/engine-commentary", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(payload),
+          signal: controller.signal,
+        });
+
+        const body = await res.json().catch(() => ({}));
+        if (!res.ok) {
+          throw new Error(body?.error || `Request failed (${res.status})`);
+        }
+
+        const text = String(body?.text ?? "").trim();
+        const finalText = text.length
+          ? text
+          : "No commentary generated for this point.";
+
+        commentaryCacheRef.current.set(cacheKey, finalText);
+        setCommentaryText(finalText);
+        setCommentaryError(null);
+      } catch (e: any) {
+        if (e?.name === "AbortError") return;
+        console.error("engine-commentary failed:", e);
+        setCommentaryError(e?.message || "Failed to generate commentary");
+        setCommentaryText(null);
+      } finally {
+        setCommentaryLoading(false);
+      }
+    }, 350);
+
+    return () => {
+      clearTimeout(t);
+      controller.abort();
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [
+    hasSeries,
+    activeIdx,
+    activePoint?.date,
+    activePoint?.mid,
+    pair,
+    windowKey,
+    mode,
+    data?.displayPair,
+    activeA?.delta,
+    activeA?.pctDelta,
+    activeA?.volPct,
+    activeRegime?.label,
+    activeRegime?.reason,
+    activeConfidence?.label,
+    activeManual?.id,
+  ]);
 
   return (
     <section className="flex flex-col gap-3 rounded-2xl border border-zinc-800 bg-black/40 px-5 pb-4 pt-4">
@@ -395,7 +526,6 @@ export default function EngineHistoryChartV2() {
             })}
           </div>
 
-          {/* Overlays */}
           <div className="inline-flex items-center gap-1 rounded-full bg-zinc-900/70 p-1 text-[11px]">
             <button
               type="button"
@@ -442,7 +572,6 @@ export default function EngineHistoryChartV2() {
         </div>
       </div>
 
-      {/* Pair selector */}
       <div className="flex items-center justify-between gap-3">
         <div className="flex min-w-0 items-center gap-2">
           <span className="text-[11px] text-zinc-500">Pair</span>
@@ -504,7 +633,6 @@ export default function EngineHistoryChartV2() {
               onTouchStart={(e) => onMove(e.touches[0].clientX)}
               onTouchEnd={() => onSelect(hoverIdx ?? snapSeries.length - 1)}
             >
-              {/* subtle grid */}
               {Array.from({ length: 5 }).map((_, i) => {
                 const y = paddingY + (innerH * i) / 4;
                 return (
@@ -528,7 +656,7 @@ export default function EngineHistoryChartV2() {
                 strokeWidth={1}
               />
 
-              {/* Phase 2: regime rail */}
+              {/* Regime rail */}
               {showRegimes &&
                 regimeSegments.length > 0 &&
                 snapSeries.length >= 2 && (
@@ -552,7 +680,7 @@ export default function EngineHistoryChartV2() {
                   </g>
                 )}
 
-              {/* Phase 1: volatility overlay */}
+              {/* Volatility overlay */}
               {showVolatility &&
                 maxVol > 0 &&
                 analytics.length === snapSeries.length && (
@@ -600,7 +728,7 @@ export default function EngineHistoryChartV2() {
                 />
               )}
 
-              {/* Phase 3: confidence overlay dots (downsampled) */}
+              {/* Confidence dots */}
               {showConfidence &&
                 confidenceByIdx.length === snapSeries.length &&
                 confidenceDotIdxs.length > 0 && (
@@ -634,8 +762,8 @@ export default function EngineHistoryChartV2() {
                 const mm = manualByDate.get(pt.date)!;
                 const r = mm.isManualOverride ? 4.5 : 3.5;
                 const fill = mm.isManualOverride
-                  ? "rgba(245,158,11,0.95)" // amber
-                  : "rgba(212,212,216,0.9)"; // zinc
+                  ? "rgba(245,158,11,0.95)"
+                  : "rgba(212,212,216,0.9)";
                 return (
                   <circle key={pt.date} cx={x} cy={y} r={r} fill={fill} />
                 );
@@ -738,9 +866,38 @@ export default function EngineHistoryChartV2() {
             </span>
           </div>
 
-          {/* Phase 2: regime context */}
+          {/* AI Commentary */}
+          <div className="mt-3 rounded-2xl border border-zinc-900 bg-black/30 p-3">
+            <div className="text-[10px] uppercase tracking-[0.18em] text-zinc-500">
+              AI Commentary
+            </div>
+
+            {commentaryLoading ? (
+              <div className="mt-2 text-[12px] text-zinc-500">
+                Generating commentary…
+              </div>
+            ) : commentaryError ? (
+              <div className="mt-2 text-[12px] text-red-400">
+                {commentaryError}
+              </div>
+            ) : commentaryText ? (
+              <div className="mt-2 text-[12px] leading-relaxed text-zinc-200">
+                {commentaryText}
+                <div className="mt-2 text-[11px] text-zinc-600">
+                  Based on engine signals (regime, confidence, volatility, deltas,
+                  and manual entries).
+                </div>
+              </div>
+            ) : (
+              <div className="mt-2 text-[12px] text-zinc-500">
+                No commentary available.
+              </div>
+            )}
+          </div>
+
+          {/* Regime */}
           {activeRegime ? (
-            <div className="mt-2 rounded-xl border border-zinc-900 bg-black/30 px-3 py-2">
+            <div className="mt-3 rounded-xl border border-zinc-900 bg-black/30 px-3 py-2">
               <div className="text-[10px] uppercase tracking-[0.18em] text-zinc-500">
                 Regime
               </div>
@@ -753,7 +910,7 @@ export default function EngineHistoryChartV2() {
             </div>
           ) : null}
 
-          {/* Phase 3: confidence */}
+          {/* Confidence */}
           {activeConfidence ? (
             <div className="mt-2 rounded-xl border border-zinc-900 bg-black/30 px-3 py-2">
               <div className="text-[10px] uppercase tracking-[0.18em] text-zinc-500">
@@ -772,7 +929,7 @@ export default function EngineHistoryChartV2() {
             </div>
           ) : null}
 
-          {/* Phase 1: analytics summary */}
+          {/* Analytics */}
           {activeA ? (
             <div className="mt-3 grid gap-2 sm:grid-cols-3">
               <div className="rounded-xl border border-zinc-900 bg-black/30 px-3 py-2">
@@ -784,9 +941,7 @@ export default function EngineHistoryChartV2() {
                     ? "—"
                     : `${activeA.delta > 0 ? "+" : activeA.delta < 0 ? "−" : ""}${Math.abs(
                         activeA.delta
-                      ).toLocaleString("en-US", {
-                        maximumFractionDigits: 6,
-                      })}`}
+                      ).toLocaleString("en-US", { maximumFractionDigits: 6 })}`}
                 </div>
                 <div className="mt-0.5 text-[11px] text-zinc-500 tabular-nums">
                   {activeA.pctDelta === null || !Number.isFinite(activeA.pctDelta)
@@ -805,13 +960,7 @@ export default function EngineHistoryChartV2() {
                     : `${activeA.volPct.toFixed(3)}%`}
                 </div>
                 <div className="mt-0.5 text-[11px] text-zinc-500">
-                  {bucketVolPct(activeA.volPct) === "unknown"
-                    ? "Insufficient history"
-                    : bucketVolPct(activeA.volPct) === "low"
-                      ? "Low (7d)"
-                      : bucketVolPct(activeA.volPct) === "elevated"
-                        ? "Elevated (7d)"
-                        : "High (7d)"}
+                  {volLabelFromBucket(bucketVolPct(activeA.volPct))}
                 </div>
               </div>
 
@@ -829,12 +978,14 @@ export default function EngineHistoryChartV2() {
             </div>
           ) : null}
 
-          {/* Manual details — FIXED: uses activeManual so Inspector matches the active point */}
+          {/* Manual details (activeManual) */}
           {activeManual ? (
             <div className="mt-3 space-y-1 text-[12px] text-zinc-300">
               <div>
                 <span className="text-zinc-500">Type:</span>{" "}
-                {activeManual.isManualOverride ? "Manual override" : "Manual fixing"}
+                {activeManual.isManualOverride
+                  ? "Manual override"
+                  : "Manual fixing"}
               </div>
               <div>
                 <span className="text-zinc-500">Created:</span>{" "}
@@ -853,10 +1004,10 @@ export default function EngineHistoryChartV2() {
                 {activeManual.notes ?? "—"}
               </div>
 
-              {/* Optional: show locked selection state if different */}
               {selectedManual && activeManual.id !== selectedManual.id ? (
                 <div className="pt-1 text-[11px] text-zinc-500">
-                  Note: a different manual entry is currently locked via click selection.
+                  Note: a different manual entry is currently locked via click
+                  selection.
                 </div>
               ) : null}
             </div>
@@ -869,10 +1020,8 @@ export default function EngineHistoryChartV2() {
       ) : null}
 
       <p className="mt-1 text-[11px] leading-relaxed text-zinc-500">
-        v2 adds an “All” window and overlays from{" "}
-        <span className="font-mono">manual_fixings</span>. Use “Effective” to see
-        applied overrides. Phase 2 adds a deterministic regime rail. Phase 3 adds
-        deterministic confidence scoring and an optional confidence overlay.
+        Phase 4 adds auto-generated AI commentary via a server route using the
+        OpenAI Responses API.
       </p>
     </section>
   );
