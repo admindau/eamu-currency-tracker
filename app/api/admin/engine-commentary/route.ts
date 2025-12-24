@@ -18,6 +18,8 @@ export const dynamic = "force-dynamic";
  */
 
 type CommentaryRequest = {
+  kind?: "point_summary" | "official_vs_manual";
+
   pairLabel: string;
   date: string; // YYYY-MM-DD
   mid: number;
@@ -37,6 +39,12 @@ type CommentaryRequest = {
   confidenceReasons?: string[] | null;
 
   manualLabel?: "Manual override" | "Manual fixing" | "None";
+
+  // Only used for kind="official_vs_manual"
+  officialMid?: number | null;
+  manualMid?: number | null;
+  absDiff?: number | null;
+  pctDiff?: number | null;
 };
 
 type CacheEntry = {
@@ -58,50 +66,57 @@ declare global {
   var __eamu_engine_commentary_rate: Map<string, RateEntry> | undefined;
 }
 
-function getCacheStore() {
-  if (!globalThis.__eamu_engine_commentary_cache) {
-    globalThis.__eamu_engine_commentary_cache = new Map<string, CacheEntry>();
+function getCache(): Map<string, CacheEntry> {
+  if (!global.__eamu_engine_commentary_cache) {
+    global.__eamu_engine_commentary_cache = new Map();
   }
-  return globalThis.__eamu_engine_commentary_cache;
+  return global.__eamu_engine_commentary_cache;
 }
 
-function getRateStore() {
-  if (!globalThis.__eamu_engine_commentary_rate) {
-    globalThis.__eamu_engine_commentary_rate = new Map<string, RateEntry>();
+function getRateMap(): Map<string, RateEntry> {
+  if (!global.__eamu_engine_commentary_rate) {
+    global.__eamu_engine_commentary_rate = new Map();
   }
-  return globalThis.__eamu_engine_commentary_rate;
+  return global.__eamu_engine_commentary_rate;
 }
 
-function nowMs() {
-  return Date.now();
+function json(body: any, init?: ResponseInit) {
+  return NextResponse.json(body, init);
 }
 
-function toNum(v: unknown): number | null {
-  const n = Number(v);
-  return Number.isFinite(n) ? n : null;
-}
-
-function cleanStr(v: unknown): string | null {
+function cleanStr(v: any): string | null {
   if (typeof v !== "string") return null;
   const s = v.trim();
   return s.length ? s : null;
 }
 
-function clampReasons(arr: unknown): string[] {
-  if (!Array.isArray(arr)) return [];
-  return arr
-    .filter((x) => typeof x === "string")
-    .map((x) => x.trim())
-    .filter(Boolean)
-    .slice(0, 6);
+function toNum(v: any): number | null {
+  const n = Number(v);
+  return Number.isFinite(n) ? n : null;
 }
 
-/**
- * Build a stable cache key.
- * Avoids churn by rounding floats and excluding verbose arrays.
- */
+function clampReasons(v: any): string[] | null {
+  if (!Array.isArray(v)) return null;
+  const out = v
+    .map((x) => (typeof x === "string" ? x.trim() : ""))
+    .filter(Boolean)
+    .slice(0, 8);
+  return out.length ? out : null;
+}
+
+function getClientIp(req: NextRequest): string {
+  const xff = req.headers.get("x-forwarded-for");
+  if (xff) return xff.split(",")[0].trim();
+  const xr = req.headers.get("x-real-ip");
+  if (xr) return xr.trim();
+  return "unknown";
+}
+
 function stableKeyFromPayload(p: CommentaryRequest) {
+  const kind = p.kind ?? "point_summary";
+
   const keyObj = {
+    kind,
     pair: p.pairLabel,
     date: p.date,
     mid: Math.round(p.mid * 1e6) / 1e6,
@@ -114,19 +129,45 @@ function stableKeyFromPayload(p: CommentaryRequest) {
       p.pctDelta === null || p.pctDelta === undefined
         ? null
         : Math.round(p.pctDelta * 100) / 100,
+
+    // comparison fields (only meaningful when kind="official_vs_manual")
+    officialMid:
+      p.officialMid === null || p.officialMid === undefined
+        ? null
+        : Math.round(p.officialMid * 1e6) / 1e6,
+    manualMid:
+      p.manualMid === null || p.manualMid === undefined
+        ? null
+        : Math.round(p.manualMid * 1e6) / 1e6,
+    pctDiff:
+      p.pctDiff === null || p.pctDiff === undefined
+        ? null
+        : Math.round(p.pctDiff * 100) / 100,
   };
 
   return JSON.stringify(keyObj);
 }
 
 function buildPrompt(d: CommentaryRequest) {
+  const kind = d.kind ?? "point_summary";
   const lines: string[] = [];
 
-  lines.push("Write a short, institutional commentary based ONLY on the signals below.");
+  lines.push(
+    "Write a short, institutional commentary based ONLY on the signals below."
+  );
   lines.push("Do not introduce external causes, speculation, or real-world events.");
   lines.push("Do not mention politics, conflict, people, or stakeholders.");
   lines.push("Use cautious language: 'suggests', 'consistent with', 'indicates'.");
   lines.push("Output exactly 2–3 sentences. No bullets. No headings. No emojis.");
+
+  if (kind === "official_vs_manual") {
+    lines.push("Focus on comparing Official vs Manual for the same date and pair.");
+    lines.push(
+      "State the deviation (absolute and percent) and interpret it using regime, volatility, and confidence signals."
+    );
+    lines.push("If inputs are missing, fall back to neutral wording.");
+  }
+
   lines.push("");
 
   lines.push(`PAIR: ${d.pairLabel}`);
@@ -134,12 +175,24 @@ function buildPrompt(d: CommentaryRequest) {
   lines.push(`MODE: ${d.modeLabel}`);
   lines.push(`MID: ${Number(d.mid).toLocaleString()}`);
 
+  if (kind === "official_vs_manual") {
+    if (d.officialMid !== null && d.officialMid !== undefined)
+      lines.push(`OFFICIAL MID: ${Number(d.officialMid).toLocaleString()}`);
+    if (d.manualMid !== null && d.manualMid !== undefined)
+      lines.push(`MANUAL MID: ${Number(d.manualMid).toLocaleString()}`);
+
+    if (d.absDiff !== null && d.absDiff !== undefined)
+      lines.push(`MANUAL − OFFICIAL: ${d.absDiff}`);
+
+    if (d.pctDiff !== null && d.pctDiff !== undefined)
+      lines.push(`PCT DEVIATION: ${d.pctDiff}%`);
+  }
+
   if (d.delta !== null && d.delta !== undefined) lines.push(`Δ DAY: ${d.delta}`);
   if (d.pctDelta !== null && d.pctDelta !== undefined)
-    lines.push(`%Δ DAY: ${d.pctDelta}%`);
+    lines.push(`% Δ DAY: ${d.pctDelta}%`);
 
-  if (d.volPct !== null && d.volPct !== undefined)
-    lines.push(`VOLATILITY(7d): ${d.volPct}%`);
+  if (d.volPct !== null && d.volPct !== undefined) lines.push(`VOL (7D): ${d.volPct}%`);
   if (d.volLabel) lines.push(`VOL BUCKET: ${d.volLabel}`);
 
   if (d.regimeLabel) lines.push(`REGIME: ${d.regimeLabel}`);
@@ -153,63 +206,6 @@ function buildPrompt(d: CommentaryRequest) {
   lines.push(`MANUAL: ${d.manualLabel ?? "None"}`);
 
   return lines.join("\n");
-}
-
-/**
- * Best-effort IP extraction for rate-limiting.
- */
-function getClientIp(req: NextRequest) {
-  const xff = req.headers.get("x-forwarded-for");
-  if (xff) return xff.split(",")[0]?.trim() || "unknown";
-  return (req as any).ip || "unknown";
-}
-
-function rateLimitOrThrow(ip: string, opts: { limit: number; windowMs: number }) {
-  const store = getRateStore();
-  const t = nowMs();
-  const entry = store.get(ip);
-
-  if (!entry) {
-    store.set(ip, { count: 1, windowStart: t });
-    return { remaining: opts.limit - 1, resetMs: opts.windowMs };
-  }
-
-  const elapsed = t - entry.windowStart;
-  if (elapsed > opts.windowMs) {
-    store.set(ip, { count: 1, windowStart: t });
-    return { remaining: opts.limit - 1, resetMs: opts.windowMs };
-  }
-
-  if (entry.count >= opts.limit) {
-    const reset = opts.windowMs - elapsed;
-    const e = new Error("Rate limit exceeded");
-    (e as any).status = 429;
-    (e as any).resetMs = reset;
-    throw e;
-  }
-
-  entry.count += 1;
-  store.set(ip, entry);
-  return { remaining: opts.limit - entry.count, resetMs: opts.windowMs - elapsed };
-}
-
-function json(body: any, init: { status?: number; headers?: Record<string, string> } = {}) {
-  const res = NextResponse.json(body, { status: init.status ?? 200 });
-  if (init.headers) {
-    for (const [k, v] of Object.entries(init.headers)) res.headers.set(k, v);
-  }
-  return res;
-}
-
-export async function OPTIONS() {
-  return new NextResponse(null, {
-    status: 204,
-    headers: {
-      "Access-Control-Allow-Origin": "*",
-      "Access-Control-Allow-Methods": "POST, OPTIONS",
-      "Access-Control-Allow-Headers": "Content-Type, Authorization",
-    },
-  });
 }
 
 export async function POST(req: NextRequest) {
@@ -230,14 +226,15 @@ export async function POST(req: NextRequest) {
     Number(process.env.ENGINE_COMMENTARY_RL_WINDOW_MS || 60_000)
   );
 
-  const ip = getClientIp(req);
-  let rlMeta: { remaining: number; resetMs: number } | null = null;
-
   try {
-    rlMeta = rateLimitOrThrow(ip, { limit: rlLimit, windowMs: rlWindowMs });
-
     const body = await req.json();
+
     const payload: CommentaryRequest = {
+      kind:
+        body?.kind === "official_vs_manual" || body?.kind === "point_summary"
+          ? body.kind
+          : "point_summary",
+
       pairLabel: cleanStr(body?.pairLabel) ?? "—",
       date: cleanStr(body?.date) ?? "—",
       mid: Number(body?.mid),
@@ -261,15 +258,62 @@ export async function POST(req: NextRequest) {
         body?.manualLabel === "None"
           ? body.manualLabel
           : "None",
+
+      officialMid: toNum(body?.officialMid),
+      manualMid: toNum(body?.manualMid),
+      absDiff: toNum(body?.absDiff),
+      pctDiff: toNum(body?.pctDiff),
     };
 
     if (!Number.isFinite(payload.mid)) {
       return json({ error: "Invalid mid" }, { status: 400 });
     }
 
+    const kind = payload.kind ?? "point_summary";
+
+    if (kind === "official_vs_manual") {
+      const om = payload.officialMid;
+      const mm = payload.manualMid;
+      if (!Number.isFinite(Number(om)) || !Number.isFinite(Number(mm))) {
+        // Fall back gracefully rather than erroring the UI
+        payload.kind = "point_summary";
+        payload.officialMid = null;
+        payload.manualMid = null;
+        payload.absDiff = null;
+        payload.pctDiff = null;
+      } else {
+        // Compute deterministically server-side (trust-but-verify)
+        const abs = Number(mm) - Number(om);
+        const pct = Number(om) !== 0 ? (Number(mm) / Number(om) - 1) * 100 : null;
+        payload.absDiff = Number.isFinite(abs) ? abs : null;
+        payload.pctDiff = pct !== null && Number.isFinite(pct) ? pct : null;
+      }
+    }
+
+    // Rate limit
+    const ip = getClientIp(req);
+    const rate = getRateMap();
+    const now = Date.now();
+    const entry = rate.get(ip);
+
+    if (!entry || now - entry.windowStart >= rlWindowMs) {
+      rate.set(ip, { count: 1, windowStart: now });
+    } else {
+      entry.count += 1;
+      if (entry.count > rlLimit) {
+        const resetMs = entry.windowStart + rlWindowMs - now;
+        return json(
+          { error: "Rate limit exceeded", resetMs },
+          { status: 429, headers: { "retry-after": String(Math.ceil(resetMs / 1000)) } }
+        );
+      }
+      rate.set(ip, entry);
+    }
+
+    // Cache
+    const cache = getCache();
     const cacheKey = stableKeyFromPayload(payload);
-    const cache = getCacheStore();
-    const t = nowMs();
+    const t = Date.now();
 
     const hit = cache.get(cacheKey);
     if (hit && hit.expiresAt > t) {
@@ -291,7 +335,7 @@ export async function POST(req: NextRequest) {
       max_output_tokens: 160,
     });
 
-    const text = (r.output_text ?? "").trim() || "No commentary generated.";
+    const text = String((r as any)?.output_text ?? "").trim();
 
     cache.set(cacheKey, {
       text,

@@ -156,6 +156,12 @@ export default function EngineHistoryChartV2() {
     return m;
   }, [data]);
 
+  const officialByDate = useMemo(() => {
+    const m = new Map<string, number>();
+    (data?.official ?? []).forEach((x) => m.set(x.date, x.mid));
+    return m;
+  }, [data]);
+
   const official = data?.official ?? [];
   const effective = data?.effective ?? [];
 
@@ -355,16 +361,45 @@ export default function EngineHistoryChartV2() {
   const regimeRailH = 6;
 
   // Phase 4: auto-generate AI commentary (debounced + cached + abortable)
+  // Enhancement: when a manual fixing/override exists on the active date, generate a focused
+  // "Official vs Manual" comparison analysis using deterministic deltas.
   useEffect(() => {
     if (!hasSeries || activeIdx === null || !activePoint) return;
 
     const modeLabel = formatMode(mode) as "Official" | "Effective" | "Both";
+
+    const mf = activeManual;
+    const officialMidRaw = officialByDate.get(activePoint.date) ?? null;
+
+    const kind: "point_summary" | "official_vs_manual" =
+      mf && officialMidRaw !== null ? "official_vs_manual" : "point_summary";
+
+    // Deterministic comparison metrics (only used for official_vs_manual)
+    const officialMid = kind === "official_vs_manual" ? officialMidRaw : null;
+    const manualMid = kind === "official_vs_manual" ? mf!.mid : null;
+    const absDiff =
+      kind === "official_vs_manual" && officialMid !== null && manualMid !== null
+        ? manualMid - officialMid
+        : null;
+    const pctDiff =
+      kind === "official_vs_manual" &&
+      officialMid !== null &&
+      manualMid !== null &&
+      officialMid !== 0
+        ? (manualMid / officialMid - 1) * 100
+        : null;
+
     const cacheKey = [
+      "v2",
+      kind,
       pair,
       windowKey,
       mode,
       activePoint.date,
-      String(activePoint.mid),
+      // round to reduce cache fragmentation
+      String(Math.round(activePoint.mid * 1e6) / 1e6),
+      officialMid !== null ? String(Math.round(officialMid * 1e6) / 1e6) : "na",
+      manualMid !== null ? String(Math.round(manualMid * 1e6) / 1e6) : "na",
     ].join("|");
 
     const cached = commentaryCacheRef.current.get(cacheKey);
@@ -385,13 +420,14 @@ export default function EngineHistoryChartV2() {
     const vb = bucketVolPct(activeA?.volPct ?? null);
     const volLabel = volLabelFromBucket(vb);
 
-    const manualLabel: "Manual override" | "Manual fixing" | "None" = activeManual
-      ? activeManual.isManualOverride
+    const manualLabel: "Manual override" | "Manual fixing" | "None" = mf
+      ? mf.isManualOverride
         ? "Manual override"
         : "Manual fixing"
       : "None";
 
-    const payload = {
+    const payload: any = {
+      kind,
       pairLabel: data?.displayPair ?? "—",
       date: activePoint.date,
       mid: activePoint.mid,
@@ -411,6 +447,13 @@ export default function EngineHistoryChartV2() {
 
       manualLabel,
     };
+
+    if (kind === "official_vs_manual") {
+      payload.officialMid = officialMid;
+      payload.manualMid = manualMid;
+      payload.absDiff = absDiff;
+      payload.pctDiff = pctDiff;
+    }
 
     const t = setTimeout(async () => {
       try {
@@ -465,6 +508,8 @@ export default function EngineHistoryChartV2() {
     activeRegime?.reason,
     activeConfidence?.label,
     activeManual?.id,
+    // include official series presence for comparison
+    official.length,
   ]);
 
   return (
@@ -872,6 +917,47 @@ export default function EngineHistoryChartV2() {
               AI Commentary
             </div>
 
+            {activeManual && officialByDate.has(activePoint.date)
+              ? (() => {
+                  const om = officialByDate.get(activePoint.date)!;
+                  const mm = activeManual.mid;
+                  const abs = mm - om;
+                  const pct = om !== 0 ? (mm / om - 1) * 100 : null;
+                  return (
+                    <div className="mt-2 rounded-xl border border-zinc-900 bg-black/20 px-3 py-2">
+                      <div className="grid gap-1 sm:grid-cols-2">
+                        <div className="text-[11px] text-zinc-500">Official</div>
+                        <div className="text-[12px] text-zinc-200 tabular-nums">
+                          {om.toLocaleString()}
+                        </div>
+
+                        <div className="text-[11px] text-zinc-500">
+                          {activeManual.isManualOverride
+                            ? "Manual override"
+                            : "Manual fixing"}
+                        </div>
+                        <div className="text-[12px] text-zinc-200 tabular-nums">
+                          {mm.toLocaleString()}
+                        </div>
+
+                        <div className="text-[11px] text-zinc-500">Deviation</div>
+                        <div className="text-[12px] text-zinc-200 tabular-nums">
+                          {abs > 0 ? "+" : abs < 0 ? "−" : ""}
+                          {Math.abs(abs).toLocaleString("en-US", {
+                            maximumFractionDigits: 6,
+                          })}
+                          {pct !== null && Number.isFinite(pct) ? (
+                            <span className="ml-2 text-[11px] text-zinc-500">
+                              ({formatSigned(pct, 2)}%)
+                            </span>
+                          ) : null}
+                        </div>
+                      </div>
+                    </div>
+                  );
+                })()
+              : null}
+
             {commentaryLoading ? (
               <div className="mt-2 text-[12px] text-zinc-500">
                 Generating commentary…
@@ -944,7 +1030,8 @@ export default function EngineHistoryChartV2() {
                       ).toLocaleString("en-US", { maximumFractionDigits: 6 })}`}
                 </div>
                 <div className="mt-0.5 text-[11px] text-zinc-500 tabular-nums">
-                  {activeA.pctDelta === null || !Number.isFinite(activeA.pctDelta)
+                  {activeA.pctDelta === null ||
+                  !Number.isFinite(activeA.pctDelta)
                     ? ""
                     : `${formatSigned(activeA.pctDelta, 2)}%`}
                 </div>
@@ -1021,7 +1108,8 @@ export default function EngineHistoryChartV2() {
 
       <p className="mt-1 text-[11px] leading-relaxed text-zinc-500">
         Phase 4 adds auto-generated AI commentary via a server route using the
-        OpenAI Responses API.
+        OpenAI Responses API. When a manual entry exists, the model compares
+        Official vs Manual using deterministic deviation metrics.
       </p>
     </section>
   );
