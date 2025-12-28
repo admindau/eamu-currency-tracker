@@ -1,97 +1,96 @@
 "use client";
 
-import { FormEvent, useState } from "react";
-import { useRouter } from "next/navigation";
 import Link from "next/link";
+import { Suspense, FormEvent, useMemo, useState } from "react";
+import { useRouter, useSearchParams } from "next/navigation";
 import { getSupabaseBrowserClient } from "@/lib/supabase-browser";
 
-export default function CentralBankLoginPage() {
+function safeNextPath(input: string | null, fallback: string) {
+  if (!input) return fallback;
+  // Only allow in-app relative paths to avoid open redirects
+  if (!input.startsWith("/")) return fallback;
+  if (input.startsWith("//")) return fallback;
+  return input;
+}
+
+function LoginContent() {
   const router = useRouter();
+  const searchParams = useSearchParams();
   const supabase = getSupabaseBrowserClient();
+
+  const nextPath = useMemo(() => {
+    const raw = searchParams.get("next");
+    return safeNextPath(raw, "/central-bank");
+  }, [searchParams]);
 
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
-  const [status, setStatus] = useState<
-    "idle" | "signing-in" | "error"
-  >("idle");
+  const [status, setStatus] = useState<"idle" | "signing-in" | "error">("idle");
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
+
+  async function handleClearSession() {
+    try {
+      await supabase.auth.signOut();
+    } catch {
+      // ignore
+    } finally {
+      setErrorMessage(null);
+      setStatus("idle");
+    }
+  }
 
   async function handleSubmit(e: FormEvent) {
     e.preventDefault();
     setStatus("signing-in");
     setErrorMessage(null);
 
-    try {
-      const { data, error } = await supabase.auth.signInWithPassword({
-        email,
-        password,
-      });
+    const cleanEmail = email.trim().toLowerCase();
 
-      if (error || !data?.user) {
-        console.error("Supabase password sign-in error:", error);
-        setStatus("error");
-        setErrorMessage(
-          error?.message ?? "Invalid email or password. Please try again."
-        );
-        return;
-      }
+    const { data, error } = await supabase.auth.signInWithPassword({
+      email: cleanEmail,
+      password,
+    });
 
-      // Success → go to central bank dashboard
-      router.replace("/central-bank");
-    } catch (err: any) {
-      console.error("Password sign-in error:", err);
+    if (error || !data?.session) {
       setStatus("error");
-      setErrorMessage("Unexpected error during sign-in.");
+      setErrorMessage(error?.message ?? "Sign-in failed. Please try again.");
+      return;
     }
-  }
 
-  async function handleClearSession() {
-    try {
-      await supabase.auth.signOut();
-    } catch (err) {
-      console.error("Error clearing session:", err);
-    } finally {
-      setStatus("idle");
-      setErrorMessage(null);
-    }
+    setStatus("idle");
+    router.replace(nextPath);
   }
 
   return (
-    <main className="min-h-screen bg-black text-zinc-100 flex items-center justify-center px-4">
-      <div className="w-full max-w-md rounded-2xl border border-zinc-800 bg-zinc-950/80 p-6 space-y-6">
-        <div className="space-y-2">
-          <p className="text-[0.7rem] uppercase tracking-[0.25em] text-zinc-500">
-            EAMU FX · Central Bank Mode
-          </p>
-          <h1 className="text-xl font-semibold tracking-tight">
-            Sign in to A-Mode
+    <main className="min-h-[calc(100vh-64px)] px-4 py-10">
+      <div className="mx-auto w-full max-w-md rounded-2xl border border-zinc-800 bg-black/40 p-6">
+        <div className="mb-6">
+          <h1 className="text-lg font-semibold tracking-tight text-zinc-100">
+            Central Bank Access
           </h1>
-          <p className="text-xs text-zinc-400">
-            This area is reserved for authorised central bank and admin users.
-            Use your assigned email and password to access the dashboard.
+          <p className="mt-1 text-sm leading-relaxed text-zinc-400">
+            Sign in to access the Central Bank dashboard.
           </p>
         </div>
 
         <form onSubmit={handleSubmit} className="space-y-4">
-          <div className="space-y-1">
-            <label
-              htmlFor="email"
-              className="text-xs font-medium text-zinc-300"
-            >
-              Work email
+          <div className="space-y-2">
+            <label htmlFor="email" className="text-xs font-medium text-zinc-300">
+              Email
             </label>
             <input
               id="email"
               type="email"
+              autoComplete="email"
               required
               value={email}
               onChange={(e) => setEmail(e.target.value)}
-              placeholder="you@centralbank.gov.ss"
-              className="w-full rounded-xl border border-zinc-800 bg-black px-3 py-2 text-sm text-zinc-100 focus:border-emerald-500 focus:outline-none focus:ring-1 focus:ring-emerald-500/60"
+              placeholder="you@example.com"
+              className="w-full rounded-xl border border-zinc-800 bg-black/60 px-3 py-2 text-sm text-zinc-100 placeholder:text-zinc-500 focus:outline-none focus:ring-1 focus:ring-emerald-500/60"
             />
           </div>
 
-          <div className="space-y-1">
+          <div className="space-y-2">
             <label
               htmlFor="password"
               className="text-xs font-medium text-zinc-300"
@@ -101,36 +100,34 @@ export default function CentralBankLoginPage() {
             <input
               id="password"
               type="password"
+              autoComplete="current-password"
               required
               value={password}
               onChange={(e) => setPassword(e.target.value)}
               placeholder="••••••••"
-              className="w-full rounded-xl border border-zinc-800 bg-black px-3 py-2 text-sm text-zinc-100 focus:border-emerald-500 focus:outline-none focus:ring-1 focus:ring-emerald-500/60"
+              className="w-full rounded-xl border border-zinc-800 bg-black/60 px-3 py-2 text-sm text-zinc-100 placeholder:text-zinc-500 focus:outline-none focus:ring-1 focus:ring-emerald-500/60"
             />
           </div>
+
+          {status === "error" && (
+            <div className="rounded-xl border border-red-900/40 bg-red-950/30 px-3 py-2 text-sm text-red-200">
+              {errorMessage ?? "Sign-in failed."}
+            </div>
+          )}
 
           <button
             type="submit"
             disabled={status === "signing-in"}
-            className="w-full rounded-xl bg-emerald-500 px-3 py-2 text-sm font-medium text-black hover:bg-emerald-400 disabled:cursor-not-allowed disabled:opacity-70"
+            className="w-full rounded-xl bg-emerald-500 px-3 py-2 text-sm font-medium text-black transition hover:bg-emerald-400 disabled:cursor-not-allowed disabled:opacity-60"
           >
             {status === "signing-in" ? "Signing in…" : "Sign in"}
           </button>
-
-          {status === "error" && errorMessage && (
-            <p className="text-xs text-red-400">{errorMessage}</p>
-          )}
-
-          <p className="text-[0.7rem] text-zinc-500">
-            Accounts are provisioned centrally. If you need access, please
-            contact the system administrator.
-          </p>
         </form>
 
-        <div className="flex items-center justify-between text-[0.7rem] text-zinc-500">
+        <div className="mt-6 flex items-center justify-between text-sm">
           <Link
             href="/"
-            className="text-zinc-300 hover:text-white transition underline-offset-4 hover:underline"
+            className="text-zinc-400 hover:text-zinc-100 transition"
           >
             ← Back to public dashboard
           </Link>
@@ -144,5 +141,28 @@ export default function CentralBankLoginPage() {
         </div>
       </div>
     </main>
+  );
+}
+
+export default function CentralBankLoginPage() {
+  // ✅ Fix: Next requires useSearchParams() to be inside Suspense
+  return (
+    <Suspense
+      fallback={
+        <main className="min-h-[calc(100vh-64px)] px-4 py-10">
+          <div className="mx-auto w-full max-w-md rounded-2xl border border-zinc-800 bg-black/40 p-6">
+            <div className="h-4 w-48 rounded bg-zinc-900/60" />
+            <div className="mt-3 h-3 w-72 rounded bg-zinc-900/50" />
+            <div className="mt-6 space-y-3">
+              <div className="h-9 w-full rounded-xl bg-zinc-900/50" />
+              <div className="h-9 w-full rounded-xl bg-zinc-900/50" />
+              <div className="h-9 w-full rounded-xl bg-zinc-900/50" />
+            </div>
+          </div>
+        </main>
+      }
+    >
+      <LoginContent />
+    </Suspense>
   );
 }

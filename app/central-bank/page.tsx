@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState, FormEvent } from "react";
+import { useEffect, useMemo, useState, FormEvent } from "react";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
 import dynamic from "next/dynamic";
@@ -13,9 +13,7 @@ const EngineHistoryChartCard = dynamic(() => import("./EngineHistoryChartCard"),
     <section className="flex flex-col gap-3 rounded-2xl border border-zinc-800 bg-black/40 px-5 pb-4 pt-4">
       <div className="flex items-center justify-between gap-3">
         <div>
-          <h3 className="text-sm font-semibold tracking-wide text-zinc-200">
-            Engine history
-          </h3>
+          <h3 className="text-sm font-semibold tracking-wide text-zinc-200">Engine history</h3>
           <p className="mt-1 text-xs text-zinc-500">Loading chart…</p>
         </div>
       </div>
@@ -25,25 +23,20 @@ const EngineHistoryChartCard = dynamic(() => import("./EngineHistoryChartCard"),
 });
 
 // ✅ NEW: v2 chart (overlays + inspection + All)
-const EngineHistoryChartV2 = dynamic(
-  () => import("@/components/EngineHistoryChartV2"),
-  {
-    ssr: false,
-    loading: () => (
-      <section className="flex flex-col gap-3 rounded-2xl border border-zinc-800 bg-black/40 px-5 pb-4 pt-4">
-        <div className="flex items-center justify-between gap-3">
-          <div>
-            <h3 className="text-sm font-semibold tracking-wide text-zinc-200">
-              Engine history (v2)
-            </h3>
-            <p className="mt-1 text-xs text-zinc-500">Loading chart…</p>
-          </div>
+const EngineHistoryChartV2 = dynamic(() => import("@/components/EngineHistoryChartV2"), {
+  ssr: false,
+  loading: () => (
+    <section className="flex flex-col gap-3 rounded-2xl border border-zinc-800 bg-black/40 px-5 pb-4 pt-4">
+      <div className="flex items-center justify-between gap-3">
+        <div>
+          <h3 className="text-sm font-semibold tracking-wide text-zinc-200">Engine history (v2)</h3>
+          <p className="mt-1 text-xs text-zinc-500">Loading chart…</p>
         </div>
-        <div className="mt-2 h-56 w-full overflow-hidden rounded-xl border border-zinc-800 bg-zinc-950/80 px-3 py-2" />
-      </section>
-    ),
-  }
-);
+      </div>
+      <div className="mt-2 h-56 w-full overflow-hidden rounded-xl border border-zinc-800 bg-zinc-950/80 px-3 py-2" />
+    </section>
+  ),
+});
 
 type SupabaseUser = {
   id: string;
@@ -139,9 +132,29 @@ function formatDateWithWeekday(dateStr: string): string {
   return `${dateStr} (${weekday})`;
 }
 
+const DEFAULT_ALLOWED_EMAILS = "admin@savvygorilla.tech,dau.garang@boss.gov.ss";
+
+function normalizeEmail(email?: string | null) {
+  return (email ?? "").trim().toLowerCase();
+}
+
+function parseAllowedEmails(raw: string | undefined) {
+  const value = (raw ?? DEFAULT_ALLOWED_EMAILS).trim();
+  const parts = value
+    .split(",")
+    .map((s) => s.trim().toLowerCase())
+    .filter(Boolean);
+  return new Set(parts);
+}
+
 export default function CentralBankDashboardPage() {
   const router = useRouter();
   const supabase = getSupabaseBrowserClient();
+
+  const allowedEmails = useMemo(
+    () => parseAllowedEmails(process.env.NEXT_PUBLIC_CENTRAL_BANK_ALLOWED_EMAILS),
+    []
+  );
 
   const [user, setUser] = useState<SupabaseUser | null>(null);
   const [loadingUser, setLoadingUser] = useState(true);
@@ -177,30 +190,76 @@ export default function CentralBankDashboardPage() {
   useEffect(() => {
     let isMounted = true;
 
-    async function loadUser() {
-      setLoadingUser(true);
-      const { data, error } = await supabase.auth.getUser();
+    async function denyAndRedirect(reason: string, code: string) {
+      try {
+        await supabase.auth.signOut();
+      } catch {
+        // ignore
+      }
 
+      if (!isMounted) return;
+
+      // Keep message minimal; login page can show ?error=unauthorised, etc.
+      console.warn("Central Bank access denied:", reason);
+
+      setUser(null);
+      setLoadingUser(false);
+      router.replace(`/central-bank/login?error=${encodeURIComponent(code)}`);
+    }
+
+    async function loadAndAuthorizeUser() {
+      setLoadingUser(true);
+
+      const { data, error } = await supabase.auth.getUser();
       if (!isMounted) return;
 
       if (error || !data?.user) {
         router.replace("/central-bank/login");
-      } else {
-        setUser({
-          id: data.user.id,
-          email: data.user.email ?? undefined,
-        });
+        setLoadingUser(false);
+        return;
       }
 
-      setLoadingUser(false);
+      const u = data.user;
+      const email = normalizeEmail(u.email);
+
+      // 1) Allowlist fast path (explicit emails)
+      if (email && allowedEmails.has(email)) {
+        setUser({ id: u.id, email: u.email ?? undefined });
+        setLoadingUser(false);
+        return;
+      }
+
+      // 2) Role-based check: profiles.role === 'admin'
+      const { data: profile, error: profileError } = await supabase
+        .from("profiles")
+        .select("role")
+        .eq("id", u.id)
+        .maybeSingle();
+
+      if (!isMounted) return;
+
+      if (profileError) {
+        await denyAndRedirect("Profile lookup failed", "failed");
+        return;
+      }
+
+      const role = String(profile?.role ?? "").trim().toLowerCase();
+      if (role === "admin") {
+        setUser({ id: u.id, email: u.email ?? undefined });
+        setLoadingUser(false);
+        return;
+      }
+
+      // 3) Not allowed
+      await denyAndRedirect("User is not admin/allowed", "unauthorised");
     }
 
-    loadUser();
+    loadAndAuthorizeUser();
 
     return () => {
       isMounted = false;
     };
-  }, [router, supabase]);
+  }, [router, supabase, allowedEmails]);
 
   useEffect(() => {
     if (!user) return;
@@ -237,8 +296,7 @@ export default function CentralBankDashboardPage() {
           console.error("Failed to load manual_fixings:", error);
           setOverrides([]);
           setOverridesError(
-            error.message ??
-              "Could not load manual fixings. Check that the table exists."
+            error.message ?? "Could not load manual fixings. Check that the table exists."
           );
         } else {
           const normalised: ManualOverrideRow[] = (data ?? []).map((row) => ({
@@ -303,8 +361,7 @@ export default function CentralBankDashboardPage() {
           console.error("Failed to load fixing_schedule:", error);
           setSchedule(null);
           setScheduleError(
-            error.message ??
-              "Could not load fixing schedule. Check that the table exists."
+            error.message ?? "Could not load fixing schedule. Check that the table exists."
           );
         } else if (data && data.length > 0) {
           const row = data[0];
@@ -439,9 +496,7 @@ export default function CentralBankDashboardPage() {
           created_at: data.created_at,
         };
 
-        setOverrides((prev) =>
-          prev.map((row) => (row.id === updatedRow.id ? updatedRow : row))
-        );
+        setOverrides((prev) => prev.map((row) => (row.id === updatedRow.id ? updatedRow : row)));
       } else {
         const { data, error } = await supabase
           .from("manual_fixings")
@@ -516,10 +571,7 @@ export default function CentralBankDashboardPage() {
     if (!ok) return;
 
     try {
-      const { error } = await supabase
-        .from("manual_fixings")
-        .delete()
-        .eq("id", row.id);
+      const { error } = await supabase.from("manual_fixings").delete().eq("id", row.id);
 
       if (error) {
         console.error("Failed to delete manual_fixings:", error);
@@ -930,7 +982,9 @@ export default function CentralBankDashboardPage() {
                 </button>
                 <button
                   type="button"
-                  onClick={() => downloadManualFixingsCsv(overrides, "manual_fixings_overrides_excel.csv")}
+                  onClick={() =>
+                    downloadManualFixingsCsv(overrides, "manual_fixings_overrides_excel.csv")
+                  }
                   className="rounded-xl border border-zinc-700 bg-black px-3 py-2 text-zinc-100 hover:bg-zinc-900"
                 >
                   Export overrides (Excel)
@@ -993,7 +1047,9 @@ export default function CentralBankDashboardPage() {
                     <div className="grid grid-cols-2 gap-2 text-[0.8rem]">
                       <div>
                         <p className="text-zinc-500">Configured</p>
-                        <p className="text-zinc-100">{formatDateWithWeekday(schedule.next_fixing_date)}</p>
+                        <p className="text-zinc-100">
+                          {formatDateWithWeekday(schedule.next_fixing_date)}
+                        </p>
                       </div>
 
                       <div>
@@ -1004,18 +1060,23 @@ export default function CentralBankDashboardPage() {
 
                     {schedule.created_email && (
                       <p className="text-[0.7rem] text-zinc-500">
-                        Last updated by <span className="text-zinc-300">{schedule.created_email}</span>.
+                        Last updated by{" "}
+                        <span className="text-zinc-300">{schedule.created_email}</span>.
                       </p>
                     )}
                   </>
                 ) : (
                   <p className="text-[0.75rem] text-zinc-500">
-                    No schedule configured yet. Use &quot;Edit schedule&quot; to set the next fixing date.
+                    No schedule configured yet. Use &quot;Edit schedule&quot; to set the next fixing
+                    date.
                   </p>
                 )}
 
                 {editingSchedule && (
-                  <form onSubmit={handleSaveSchedule} className="mt-2 space-y-2 border-t border-zinc-900 pt-3">
+                  <form
+                    onSubmit={handleSaveSchedule}
+                    className="mt-2 space-y-2 border-t border-zinc-900 pt-3"
+                  >
                     <div className="space-y-1">
                       <label className="text-[0.7rem] text-zinc-400">Next fixing date</label>
                       <input
